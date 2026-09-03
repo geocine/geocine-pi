@@ -13,9 +13,10 @@ is logged as future fine-tuning data.
 | Extension | What it does | Invocation |
 | --- | --- | --- |
 | `advisor` | `consult` tool: stages a minimal snapshot, optional guardrail pre-screen, runs a consultant, returns one advisory note. Rescuer proposed by role; user approves, overrides, or denies. | `consult` tool, `/consult`, `/consultants` |
+| `ask-user` | `ask_user` tool: lets the model ask you one question (pick-one options or free text) via pi's own dialogs — so it never improvises file/plugin-based prompting mechanisms from its training data. | `ask_user` tool |
 | `watchdog` | Loop/fail-streak detection (deterministic counters + optional mini-LLM verdict); injects "Located" hints. | Automatic. `/watchdog` |
 | `rescue` | Captures manual local-to-frontier `/model` switches as training episodes; drafts lessons from them. | Automatic. `/distill` |
-| `context-keeper` | Long-session context management: early compaction for local providers (`compactAtTokens`), `recall` transcript search (compaction is never lossy), structured prefix-cache-aligned checkpoint compaction, and opt-in pruning of old oversized tool results. | Automatic. `recall` tool |
+| `context-keeper` | Long-session context management: early + idle compaction for local providers, deterministic ARC-style compaction digest (no model call; LLM checkpoint optional), ingestion-time pruning of big shell outputs, and `recall` transcript search so compaction is never lossy. | Automatic. `recall` tool |
 | `worked-timer` | Codex-style run timing: live elapsed on the "Working..." line, "Worked for Xm Ys · turns · tool calls" summary per run (approval-dialog wait time excluded). | Automatic |
 | `geocine-menu` | One hub menu for everything above. | `/geocine` |
 | `bash-repair` | Strips terminal noise; prepends compact failure summaries (go/cargo/pytest/node). | Automatic |
@@ -34,7 +35,7 @@ cp geocine.example.json ~/.pi/agent/geocine.json   # then edit consultants
 ```bash
 pi
 /geocine                 # hub: consultants, approval mode, toggles, logs, lessons
-/consult @local-big what does this repo do?
+/consult @frontier +docs/outline.md is this topic order right?   # + tokens stage files
 ```
 
 When the local model gets stuck it calls the `consult` tool itself,
@@ -44,6 +45,7 @@ outcome lands in the consult-log.
 ## Docs
 
 - [Configuration](docs/configuration.md) — consultants, roles, jails, approval gate, watchdog, testing
-- [Context management](docs/context.md) — pruner, recall tool, checkpoint compaction, and the research behind them
+- [Local Qwen server](docs/local-qwen.md) — recommended `llama-server` launch flags for Qwen3.8-27B and why they matter
+- [Context management](docs/context.md) — compaction modes, ingestion pruner, recall tool, and the research behind them
 - [Training data](docs/training-data.md) — the decision log, rescue episodes, mining history, lessons
 - [Docker jail](docs/docker-jail.md) — hardened consultant isolation and auth notes
