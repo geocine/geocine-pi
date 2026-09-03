@@ -16,6 +16,7 @@ is logged as future fine-tuning data.
 | `watchdog` | Loop/fail-streak detection (deterministic counters + optional mini-LLM verdict); injects "Located" hints. | Automatic. `/watchdog` |
 | `rescue` | Captures manual local-to-frontier `/model` switches as training episodes; drafts lessons from them. | Automatic. `/distill` |
 | `context-keeper` | Long-session context management: early compaction for local providers (`compactAtTokens`), `recall` transcript search (compaction is never lossy), structured prefix-cache-aligned checkpoint compaction, and opt-in pruning of old oversized tool results. | Automatic. `recall` tool |
+| `worked-timer` | Codex-style run timing: live elapsed on the "Working..." line, "Worked for Xm Ys · turns · tool calls" summary per run (approval-dialog wait time excluded). | Automatic |
 | `geocine-menu` | One hub menu for everything above. | `/geocine` |
 | `bash-repair` | Strips terminal noise; prepends compact failure summaries (go/cargo/pytest/node). | Automatic |
 | `qwen-harness` | pi + llama.cpp pairing for Qwen: tool-call recovery, schema fixes, thinking budgets. | Automatic. `/qwen` |
