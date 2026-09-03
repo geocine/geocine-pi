@@ -63,13 +63,20 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
 
 ## Context keeper
 
-- `context.checkpoint` / `pruner` / `recall` — the three mechanisms
-  (structured checkpoint compaction, old-tool-result trimming, transcript
-  search tool). All default on.
+- `context.checkpoint` / `recall` — structured checkpoint compaction and
+  the transcript search tool. Default on.
+- `context.compactAtTokens` — compact early at this many tokens while a
+  local provider is active (pi's own threshold, contextWindow − reserve, is
+  minutes of prompt re-ingest too late on local hardware). Unset = off.
+- `context.pruner` — old-tool-result trimming. **Opt-in**: each newly
+  pruned result mutates the prompt mid-context, which costs a re-ingest on
+  local servers (near-full on hybrid recurrent models like Qwen3.8).
 - `context.summarizer` — consultant whose model writes the checkpoint
   (default: the session's own model, which reuses the warm KV cache).
 - `context.maxTokens`, `prunerThresholdChars`, `prunerHeadChars`,
   `prunerTailChars`, `prunerProtectRecent` — budgets.
+- `qwen.auto` / `qwen.level` — persisted `/qwen` thinking state (written
+  automatically by the command; survives restarts and `/reload`).
 
 See [context.md](context.md) for the design and the research behind it.
 

@@ -31,7 +31,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { type ContextConfig, loadConfig, logDir } from "../lib/config.ts";
+import { type ContextConfig, DEFAULT_LOCAL_PROVIDERS, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
 
 const PRUNE_MARKER_PREFIX = "\n[geocine-pi: pruned ";
@@ -206,10 +206,43 @@ const RECALL_FOOTER =
 	"\n\n(Older context was compacted away. The full raw transcript is still searchable with the recall tool — use it before re-reading files or re-running commands to recover details like exact error text, earlier tool output, or prior decisions.)";
 
 export default function contextKeeper(pi: ExtensionAPI) {
-	// -- 1. pruner: runs before every LLM call on a deep copy of messages --
+	// -- 0. proactive compaction: pi's own threshold (contextWindow -
+	// reserveTokens) fires far too late for a local server, where every
+	// context token is paid again at prompt-processing speed whenever the
+	// cache misses (and hybrid recurrent models like Qwen3.8 miss hard:
+	// prior-turn <think> stripping diverges the prompt every turn). Trigger
+	// early, dsh/ACM-style, while a local provider is active. --
+	let compactPending = false;
+	pi.on("session_compact", () => {
+		compactPending = false;
+	});
+	pi.on("session_compact_failed", () => {
+		compactPending = false;
+	});
+	pi.on("turn_end", async (_event, ctx) => {
+		const full = loadConfig(ctx.cwd);
+		const at = full.context?.compactAtTokens;
+		if (!at || at <= 0 || compactPending) return;
+		const provider = (ctx.model as { provider?: string } | undefined)?.provider;
+		const locals = full.rescue?.localProviders ?? DEFAULT_LOCAL_PROVIDERS;
+		if (!provider || !locals.includes(provider)) return;
+		const usage = ctx.getContextUsage();
+		if (usage?.tokens == null || usage.tokens < at) return;
+		compactPending = true;
+		ctx.compact({
+			onError: () => {
+				compactPending = false;
+			},
+		});
+	});
+
+	// -- 1. pruner: OPT-IN. Runs before every LLM call on a deep copy of
+	// messages. Every newly pruned result mutates the prompt mid-context:
+	// cheap for cloud caching, a partial re-ingest for local standard-KV
+	// models, and a near-full re-ingest for hybrid recurrent models. --
 	pi.on("context", async (event, ctx) => {
 		const cfg = ctxCfg(ctx.cwd);
-		if (cfg.pruner === false) return;
+		if (cfg.pruner !== true) return;
 		const pruneCfg = {
 			prunerThresholdChars: cfg.prunerThresholdChars ?? DEFAULTS.prunerThresholdChars,
 			prunerHeadChars: cfg.prunerHeadChars ?? DEFAULTS.prunerHeadChars,

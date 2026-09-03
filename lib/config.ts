@@ -113,9 +113,22 @@ export interface ContextConfig {
 	/** Max tokens for the checkpoint summary. Default 4096. */
 	maxTokens?: number;
 	/**
+	 * Proactively compact when the context reaches this many tokens (only
+	 * while a LOCAL provider is active — see rescue.localProviders). pi's
+	 * own threshold (contextWindow - reserveTokens) is far too late for a
+	 * local server: at 500 tok/s prompt speed, a 150k-token re-ingest is
+	 * minutes. dsh compacts at 0.8x context; ACM keeps the working set at
+	 * 20-60k. Unset/0 disables the early trigger.
+	 */
+	compactAtTokens?: number;
+	/**
 	 * Deterministic head/tail pruning of OLD oversized tool results before
 	 * each LLM call (model-free; the session log keeps the full output and
-	 * the recall tool can still search it). Default true.
+	 * the recall tool can still search it). Default FALSE: every newly
+	 * pruned result changes the prompt mid-context, which costs a partial
+	 * re-ingest on standard KV models and a near-FULL re-ingest on hybrid
+	 * recurrent models (Qwen3.8 class) — enable only for providers with
+	 * cheap prompt processing.
 	 */
 	pruner?: boolean;
 	/** Tool results larger than this many chars get pruned. Default 6000. */
@@ -130,6 +143,13 @@ export interface ContextConfig {
 	recall?: boolean;
 }
 
+export interface QwenConfig {
+	/** Persisted /qwen auto mode (survives restarts and /reload). */
+	auto?: boolean;
+	/** Persisted /qwen manual level (also the budget auto-mode borrows). */
+	level?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
+}
+
 export const DEFAULT_LOCAL_PROVIDERS = ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"];
 
 export interface GeocineConfig {
@@ -142,6 +162,7 @@ export interface GeocineConfig {
 	rescue?: RescueConfig;
 	approval?: ApprovalConfig;
 	context?: ContextConfig;
+	qwen?: QwenConfig;
 	/** Directory for decision logs. Default ~/.pi/agent/consult-log */
 	logDir?: string;
 }
@@ -169,6 +190,7 @@ export function loadConfig(cwd?: string): GeocineConfig {
 		rescue: { ...(global.rescue ?? {}), ...(project?.rescue ?? {}) },
 		approval: { ...(global.approval ?? {}), ...(project?.approval ?? {}) },
 		context: { ...(global.context ?? {}), ...(project?.context ?? {}) },
+		qwen: { ...(global.qwen ?? {}), ...(project?.qwen ?? {}) },
 		logDir: project?.logDir ?? global.logDir,
 	};
 	return merged;

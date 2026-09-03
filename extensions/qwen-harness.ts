@@ -15,6 +15,7 @@
 // llama-server --no-models-autoload --models-max 1 --host 127.0.0.1 --port 8080 -np 1 -ngl 99 -c 262144 -fa on --cache-type-k q4_0 --cache-type-v q4_0 --jinja
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { loadConfig, updateGlobalConfig } from "../lib/config.ts";
 
 const STATUS_ID = "qwen-harness";
 const XML_CALL_ID_PREFIX = "qwen-xml-";
@@ -559,6 +560,22 @@ function autoThinkBudget(): number | undefined {
 	return LEVEL_BUDGETS[manualLevel === "off" ? "medium" : manualLevel];
 }
 
+// Thinking mode is persisted in ~/.pi/agent/geocine.json (qwen block).
+// It used to be module state only, so every restart or /reload silently
+// dropped auto mode back to manual "off" — the "auto stopped working" bug.
+function hydrateQwenState(): void {
+	const q = loadConfig().qwen ?? {};
+	autoThinking = q.auto === true;
+	manualLevel = q.level && QWEN_LEVELS.includes(q.level as QwenLevel) ? (q.level as QwenLevel) : "off";
+}
+hydrateQwenState();
+
+function persistQwenState(): void {
+	updateGlobalConfig((g) => {
+		g.qwen = { ...(g.qwen ?? {}), auto: autoThinking, level: manualLevel };
+	});
+}
+
 const TOOL_ERROR_PATTERN = /\b(error|exception|failed|traceback|exited with code [1-9])\b/i;
 
 function lastRelevantMessage(payload: JsonObject): { role: string; text: string } | undefined {
@@ -654,6 +671,7 @@ export default function qwenHarness(pi: ExtensionAPI) {
 			const arg = String(args ?? "").trim().toLowerCase();
 			if (arg === "auto") {
 				autoThinking = !autoThinking;
+				persistQwenState();
 				setStatus(ctx, isQwenModel(ctx));
 				ctx.ui.notify(
 					autoThinking
@@ -668,6 +686,7 @@ export default function qwenHarness(pi: ExtensionAPI) {
 				// "off" exits auto entirely; other levels keep auto on and
 				// just set the budget its thinking turns use.
 				if (manualLevel === "off") autoThinking = false;
+				persistQwenState();
 				setStatus(ctx, isQwenModel(ctx));
 				const budget = LEVEL_BUDGETS[manualLevel];
 				const suffix = autoThinking ? " (auto stays on, budget applied to its thinking turns)" : "";
@@ -703,6 +722,7 @@ export default function qwenHarness(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		hydrateQwenState();
 		setStatus(ctx, isQwenModel(ctx));
 	});
 

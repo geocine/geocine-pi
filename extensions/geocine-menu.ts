@@ -192,18 +192,25 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 		}
 		case "context": {
 			const c = cfg.context ?? {};
+			// checkpoint/recall default ON; pruner defaults OFF (mid-context
+			// edits are expensive on local servers, brutal on recurrent models).
+			const state: Record<string, boolean> = {
+				checkpoint: c.checkpoint !== false,
+				pruner: c.pruner === true,
+				recall: c.recall !== false,
+			};
 			const rows = [
-				`Checkpoint compaction: ${onOff(c.checkpoint !== false)} — toggle`,
-				`Tool-result pruner: ${onOff(c.pruner !== false)} — toggle`,
-				`Recall tool: ${onOff(c.recall !== false)} — toggle`,
+				`Checkpoint compaction: ${onOff(state.checkpoint)} — toggle`,
+				`Tool-result pruner: ${onOff(state.pruner)} — toggle (off = prefix-stable)`,
+				`Recall tool: ${onOff(state.recall)} — toggle`,
 			];
 			const picked = await ctx.ui.select(
-				`Context keeper (summarizer: ${c.summarizer ?? "session model"}):`,
+				`Context keeper (summarizer: ${c.summarizer ?? "session model"}, early compact: ${c.compactAtTokens ? `${c.compactAtTokens} tokens` : "pi default"}):`,
 				rows,
 			);
 			if (!picked) return;
 			const key = picked.startsWith("Checkpoint") ? "checkpoint" : picked.startsWith("Tool-result") ? "pruner" : "recall";
-			const next = (c as Record<string, unknown>)[key] === false;
+			const next = !state[key];
 			updateGlobalConfig((g) => {
 				g.context = { ...(g.context ?? {}), [key]: next };
 			});
@@ -293,7 +300,7 @@ export default function geocineMenu(pi: ExtensionAPI) {
 					section: "approval",
 				},
 				{
-					label: `Context keeper: checkpoint ${onOff(cfg.context?.checkpoint !== false)}, pruner ${onOff(cfg.context?.pruner !== false)}, recall ${onOff(cfg.context?.recall !== false)}`,
+					label: `Context keeper: checkpoint ${onOff(cfg.context?.checkpoint !== false)}, pruner ${onOff(cfg.context?.pruner === true)}, recall ${onOff(cfg.context?.recall !== false)}`,
 					section: "context",
 				},
 				{ label: `Watchdog: ${onOff(watchdogOn)} — toggle`, section: "watchdog" },

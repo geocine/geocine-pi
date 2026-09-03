@@ -33,9 +33,40 @@ for it, since pi's session log already keeps every entry; compaction only
 hides them from the projection. `context-keeper` closes the loop by adding
 the retrieval half.
 
-## 1. Tool-result pruner (deterministic, model-free)
+## 0. When compaction triggers (and why pi's default is too late locally)
 
-Before every LLM call, tool results **older than the last
+How the engines decide:
+
+- **pi**: compacts when `contextTokens > contextWindow − reserveTokens`
+  (reserve default 16384). With a 262k-context local model that means
+  compaction at ~245k tokens — but on a local server every context token is
+  re-paid at prompt-processing speed whenever the cache misses. At 500
+  tok/s, one cache miss on a 150k context is **5 minutes of "Working…"**.
+- **deepseek-harness**: compacts at `thresholdRatio` 0.8 × context window,
+  keeps a 0.16 verbatim tail, and prunes tool results first.
+- **ACM** (paper above): keeps the working set at 20–60k tokens with
+  proactive "sawtooth" compaction well before any hard limit.
+
+`context.compactAtTokens` adds the dsh/ACM-style early trigger: after each
+turn, if the context exceeds the threshold **and a local provider is
+active** (`rescue.localProviders`), the keeper calls compaction itself.
+60000 is a good default for ~500 tok/s hardware. Cloud models are left to
+pi's own threshold.
+
+**Hybrid recurrent models (Qwen3.8 class) make this critical.** Their
+recurrent state cannot be partially rolled back like a standard KV cache:
+if a request diverges from the cached sequence anywhere but the tip,
+llama.cpp rolls back to the nearest saved checkpoint — often near position
+0 (`find_slot: non-consecutive token position …` in the server log is the
+telltale). And divergence happens *every turn* when thinking is on, because
+the Qwen chat template strips prior-turn `<think>` blocks from resent
+history. Keeping the context small is the only real defense. Server-side,
+raise `--ctx-checkpoints` (default 32) so rollback points are denser, and
+consider a smaller `-c` so pi's own threshold also fires sooner.
+
+## 1. Tool-result pruner (deterministic, model-free — **opt-in**)
+
+When enabled (`"pruner": true`), tool results **older than the last
 `prunerProtectRecent` (default 6)** whose text exceeds
 `prunerThresholdChars` (default 6000) are trimmed to
 `prunerHeadChars` + `prunerTailChars` (default 1500 + 1500) around a marker:
@@ -49,12 +80,13 @@ Ported from deepseek-harness's `compaction-tool-result-pruner`. Properties:
 
 - **Non-destructive** — pi's `context` event mutates a per-request copy;
   the session log keeps the full output, so `recall` can still search it.
-- **Deterministic** — the same message always prunes the same way, so the
-  request prefix stays stable across turns (KV/prompt cache stays warm; you
-  pay one cache miss when a result first ages past the protection window).
 - **Free** — no model call. It delays compaction by cutting dead weight
-  first, which is exactly the deepseek-harness ordering: prune, then
-  summarize what's left.
+  first, which is the deepseek-harness ordering: prune, then summarize.
+- **Off by default** — each result that newly ages past the protection
+  window mutates the prompt *mid-context*. Cloud providers just re-read a
+  suffix; a local standard-KV server re-ingests from the edit point; a
+  hybrid recurrent model re-ingests nearly everything. Enable it only where
+  prompt processing is cheap.
 
 ## 2. `recall` tool (transcript history lookup)
 
@@ -102,16 +134,17 @@ training data for a better local summarizer.
 
 ```jsonc
 "context": {
-  "checkpoint": true,            // structured checkpoint compaction
+  "checkpoint": true,            // structured checkpoint compaction (default on)
+  "compactAtTokens": 60000,      // early compaction while a local provider is active (0/unset = pi default)
   "summarizer": "local-big",     // optional: consultant name; default = session model
   "maxTokens": 4096,             // checkpoint length cap
-  "pruner": true,                // deterministic old-tool-result trimming
+  "recall": true,                // transcript search tool (default on)
+  "pruner": false,               // old-tool-result trimming — OPT-IN (mid-context edits cost re-ingest locally)
   "prunerThresholdChars": 6000,
   "prunerHeadChars": 1500,
   "prunerTailChars": 1500,
-  "prunerProtectRecent": 6,
-  "recall": true                 // transcript search tool
+  "prunerProtectRecent": 6
 }
 ```
 
-Toggle all three from `/geocine context`.
+Toggle checkpoint/pruner/recall from `/geocine context`.

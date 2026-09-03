@@ -51,14 +51,21 @@
 	},
 
 	"context": {
-		"$comment": "context-keeper: checkpoint = structured prefix-cache-aligned compaction summary (summarizer defaults to the session model — free on a warm local KV cache; set to a consultant name to use that model). pruner = deterministic head/tail trim of OLD oversized tool results before each request (session log keeps the full output). recall = transcript-search tool so compaction is never lossy.",
+		"$comment": "context-keeper. checkpoint = structured compaction summary (summarizer defaults to the session model). compactAtTokens = compact EARLY while a local provider is active — pi's own threshold (contextWindow - reserveTokens) is minutes of prompt re-ingest too late on a local server. recall = transcript-search tool so compaction is never lossy. pruner = head/tail trim of old oversized tool results; OFF by default because each newly pruned result mutates the prompt mid-context (partial re-ingest on standard KV, near-full on hybrid recurrent models like Qwen3.8).",
 		"checkpoint": true,
-		"pruner": true,
+		"compactAtTokens": 60000,
 		"recall": true,
+		"pruner": false,
 		"prunerThresholdChars": 6000,
 		"prunerHeadChars": 1500,
 		"prunerTailChars": 1500,
 		"prunerProtectRecent": 6
+	},
+
+	"qwen": {
+		"$comment": "Persisted /qwen state (auto thinking mode + budget level) — survives restarts and /reload.",
+		"auto": true,
+		"level": "medium"
 	},
 
 	"docker": {
