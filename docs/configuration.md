@@ -61,6 +61,18 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
 - `watchdog.sendHints`, `hintCooldownTurns`, `loopThreshold`,
   `failStreakThreshold` — hint pacing and tier-0 sensitivity.
 
+## Context keeper
+
+- `context.checkpoint` / `pruner` / `recall` — the three mechanisms
+  (structured checkpoint compaction, old-tool-result trimming, transcript
+  search tool). All default on.
+- `context.summarizer` — consultant whose model writes the checkpoint
+  (default: the session's own model, which reuses the warm KV cache).
+- `context.maxTokens`, `prunerThresholdChars`, `prunerHeadChars`,
+  `prunerTailChars`, `prunerProtectRecent` — budgets.
+
+See [context.md](context.md) for the design and the research behind it.
+
 ## Rescue capture
 
 - `rescue.enabled` — capture manual local-to-frontier switch episodes.

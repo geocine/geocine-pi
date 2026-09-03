@@ -15,6 +15,7 @@ is logged as future fine-tuning data.
 | `advisor` | `consult` tool: stages a minimal snapshot, optional guardrail pre-screen, runs a consultant, returns one advisory note. Rescuer proposed by role; user approves, overrides, or denies. | `consult` tool, `/consult`, `/consultants` |
 | `watchdog` | Loop/fail-streak detection (deterministic counters + optional mini-LLM verdict); injects "Located" hints. | Automatic. `/watchdog` |
 | `rescue` | Captures manual local-to-frontier `/model` switches as training episodes; drafts lessons from them. | Automatic. `/distill` |
+| `context-keeper` | Long-session context management: deterministic pruning of old oversized tool results, `recall` transcript search (compaction is never lossy), and structured prefix-cache-aligned checkpoint compaction. | Automatic. `recall` tool |
 | `geocine-menu` | One hub menu for everything above. | `/geocine` |
 | `bash-repair` | Strips terminal noise; prepends compact failure summaries (go/cargo/pytest/node). | Automatic |
 | `qwen-harness` | pi + llama.cpp pairing for Qwen: tool-call recovery, schema fixes, thinking budgets. | Automatic. `/qwen` |
@@ -42,5 +43,6 @@ outcome lands in the consult-log.
 ## Docs
 
 - [Configuration](docs/configuration.md) — consultants, roles, jails, approval gate, watchdog, testing
+- [Context management](docs/context.md) — pruner, recall tool, checkpoint compaction, and the research behind them
 - [Training data](docs/training-data.md) — the decision log, rescue episodes, mining history, lessons
 - [Docker jail](docs/docker-jail.md) — hardened consultant isolation and auth notes

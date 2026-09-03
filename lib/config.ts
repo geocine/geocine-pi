@@ -98,6 +98,38 @@ export interface RescueConfig {
 	distillConsultant?: string;
 }
 
+export interface ContextConfig {
+	/**
+	 * Replace pi's default compaction summary with the structured checkpoint
+	 * (prefix-cache-aligned summarization + shrink guarantee). Default true.
+	 */
+	checkpoint?: boolean;
+	/**
+	 * Consultant name (from consultants) whose model writes the checkpoint.
+	 * Default: the session's own model — for a local model this keeps the
+	 * summarization call on the warm KV cache, making it nearly free.
+	 */
+	summarizer?: string;
+	/** Max tokens for the checkpoint summary. Default 4096. */
+	maxTokens?: number;
+	/**
+	 * Deterministic head/tail pruning of OLD oversized tool results before
+	 * each LLM call (model-free; the session log keeps the full output and
+	 * the recall tool can still search it). Default true.
+	 */
+	pruner?: boolean;
+	/** Tool results larger than this many chars get pruned. Default 6000. */
+	prunerThresholdChars?: number;
+	/** Chars kept from the start of a pruned result. Default 1500. */
+	prunerHeadChars?: number;
+	/** Chars kept from the end of a pruned result. Default 1500. */
+	prunerTailChars?: number;
+	/** The N most recent tool results are never pruned. Default 6. */
+	prunerProtectRecent?: number;
+	/** Register the `recall` transcript-search tool. Default true. */
+	recall?: boolean;
+}
+
 export const DEFAULT_LOCAL_PROVIDERS = ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"];
 
 export interface GeocineConfig {
@@ -109,6 +141,7 @@ export interface GeocineConfig {
 	docker?: DockerConfig;
 	rescue?: RescueConfig;
 	approval?: ApprovalConfig;
+	context?: ContextConfig;
 	/** Directory for decision logs. Default ~/.pi/agent/consult-log */
 	logDir?: string;
 }
@@ -135,6 +168,7 @@ export function loadConfig(cwd?: string): GeocineConfig {
 		docker: { ...(global.docker ?? {}), ...(project?.docker ?? {}) },
 		rescue: { ...(global.rescue ?? {}), ...(project?.rescue ?? {}) },
 		approval: { ...(global.approval ?? {}), ...(project?.approval ?? {}) },
+		context: { ...(global.context ?? {}), ...(project?.context ?? {}) },
 		logDir: project?.logDir ?? global.logDir,
 	};
 	return merged;

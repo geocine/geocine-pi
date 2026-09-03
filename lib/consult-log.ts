@@ -17,7 +17,8 @@ export type LogRecord =
 	| PrescreenRecord
 	| ConsultResultRecord
 	| WatchdogRecord
-	| RescueRecord;
+	| RescueRecord
+	| CompactionRecord;
 
 export interface BaseRecord {
 	/** Record type discriminator. */
@@ -137,6 +138,24 @@ export interface RescueRecord extends BaseRecord {
 	rescuerSummary: string;
 	endedBy: "switch_back" | "session_end";
 	startedTs: string;
+}
+
+/**
+ * One checkpoint compaction: how much context was replaced, what wrote the
+ * summary, and whether the custom path succeeded or fell back to pi's
+ * default. Utilization of the recall tool after a compaction is the signal
+ * for what the checkpoint failed to carry forward.
+ */
+export interface CompactionRecord extends BaseRecord {
+	type: "compaction";
+	reason: "manual" | "threshold" | "overflow";
+	summarizer: string;
+	tokensBefore: number;
+	messagesSummarized: number;
+	summaryChars: number;
+	outcome: "custom" | "fallback_empty" | "fallback_error" | "fallback_not_smaller";
+	elapsedMs: number;
+	error?: string;
 }
 
 export function newCid(): string {

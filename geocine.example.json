@@ -50,6 +50,17 @@
 		"$comment_example": "\"baseUrl\": \"http://127.0.0.1:8081/v1\", \"model\": \"qwen3-4b\""
 	},
 
+	"context": {
+		"$comment": "context-keeper: checkpoint = structured prefix-cache-aligned compaction summary (summarizer defaults to the session model — free on a warm local KV cache; set to a consultant name to use that model). pruner = deterministic head/tail trim of OLD oversized tool results before each request (session log keeps the full output). recall = transcript-search tool so compaction is never lossy.",
+		"checkpoint": true,
+		"pruner": true,
+		"recall": true,
+		"prunerThresholdChars": 6000,
+		"prunerHeadChars": 1500,
+		"prunerTailChars": 1500,
+		"prunerProtectRecent": 6
+	},
+
 	"docker": {
 		"image": "geocine-consult"
 	},

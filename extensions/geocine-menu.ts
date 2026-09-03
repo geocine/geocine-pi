@@ -9,7 +9,7 @@
 // config on every event, so changes apply immediately — no /reload. A
 // project-level .pi/geocine.json still overrides the global file.
 //
-// Jump straight to a section: /geocine consultants|watchdog|rescue|distill|log|lessons|config
+// Jump straight to a section: /geocine consultants|approval|context|watchdog|rescue|distill|log|lessons|config
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -23,7 +23,7 @@ import {
 } from "../lib/config.ts";
 import { distillRescue, latestRescueRecord, LESSONS_DIR } from "../lib/distill.ts";
 
-const SECTIONS = ["consultants", "approval", "watchdog", "rescue", "distill", "log", "lessons", "config"] as const;
+const SECTIONS = ["consultants", "approval", "context", "watchdog", "rescue", "distill", "log", "lessons", "config"] as const;
 type Section = (typeof SECTIONS)[number];
 
 function onOff(v: boolean): string {
@@ -190,6 +190,26 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 			}
 			return;
 		}
+		case "context": {
+			const c = cfg.context ?? {};
+			const rows = [
+				`Checkpoint compaction: ${onOff(c.checkpoint !== false)} — toggle`,
+				`Tool-result pruner: ${onOff(c.pruner !== false)} — toggle`,
+				`Recall tool: ${onOff(c.recall !== false)} — toggle`,
+			];
+			const picked = await ctx.ui.select(
+				`Context keeper (summarizer: ${c.summarizer ?? "session model"}):`,
+				rows,
+			);
+			if (!picked) return;
+			const key = picked.startsWith("Checkpoint") ? "checkpoint" : picked.startsWith("Tool-result") ? "pruner" : "recall";
+			const next = (c as Record<string, unknown>)[key] === false;
+			updateGlobalConfig((g) => {
+				g.context = { ...(g.context ?? {}), [key]: next };
+			});
+			ctx.ui.notify(`context.${key}: ${onOff(next)} (persisted)`, "info");
+			return;
+		}
 		case "watchdog": {
 			const next = cfg.watchdog?.enabled === false;
 			updateGlobalConfig((g) => {
@@ -237,7 +257,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 
 export default function geocineMenu(pi: ExtensionAPI) {
 	pi.registerCommand("geocine", {
-		description: "geocine-pi hub: consultants, watchdog/rescue toggles, distill, logs, lessons, config",
+		description: "geocine-pi hub: consultants, context keeper, watchdog/rescue toggles, distill, logs, lessons, config",
 		getArgumentCompletions: (prefix: string) => {
 			const items = SECTIONS.filter((s) => s.startsWith(prefix.toLowerCase())).map((s) => ({
 				value: s,
@@ -271,6 +291,10 @@ export default function geocineMenu(pi: ExtensionAPI) {
 						Object.values(cfg.consultants).some((c) => c.autoApprove) ? " (+always-allows)" : ""
 					}`,
 					section: "approval",
+				},
+				{
+					label: `Context keeper: checkpoint ${onOff(cfg.context?.checkpoint !== false)}, pruner ${onOff(cfg.context?.pruner !== false)}, recall ${onOff(cfg.context?.recall !== false)}`,
+					section: "context",
 				},
 				{ label: `Watchdog: ${onOff(watchdogOn)} — toggle`, section: "watchdog" },
 					{ label: `Rescue capture: ${onOff(rescueOn)} — toggle`, section: "rescue" },
