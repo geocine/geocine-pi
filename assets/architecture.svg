@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 590" font-family="ui-sans-serif, system-ui, 'Segoe UI', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 700" font-family="ui-sans-serif, system-ui, 'Segoe UI', sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#565b66"/>
@@ -9,7 +9,7 @@
   </defs>
 
   <!-- ayu dark background -->
-  <rect x="0" y="0" width="940" height="590" rx="12" fill="#0b0e14"/>
+  <rect x="0" y="0" width="940" height="700" rx="12" fill="#0b0e14"/>
 
   <!-- title -->
   <text x="470" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#bfbdb6">geocine-pi: local-first loop, evidence-gated escalation</text>
@@ -24,28 +24,42 @@
   <text x="134" y="164" text-anchor="middle" font-size="11" fill="#8a9199">/qwen thinking control</text>
   <text x="134" y="186" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">cheap, always on</text>
 
-  <!-- WATCHDOG (yellow) -->
-  <rect x="22" y="252" width="224" height="96" rx="8" fill="#0f131a" stroke="#e6b450" stroke-width="1.5"/>
-  <text x="134" y="276" text-anchor="middle" font-size="12" font-weight="700" fill="#e6b450">WATCHDOG</text>
-  <text x="134" y="294" text-anchor="middle" font-size="11" fill="#8a9199">tier 0: loop / fail-streak counters</text>
-  <text x="134" y="310" text-anchor="middle" font-size="11" fill="#8a9199">tier 1: mini-LLM verdict (optional)</text>
-  <text x="134" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">injects "Located" hints</text>
+  <!-- CONTEXT KEEPER (teal) -->
+  <rect x="22" y="224" width="224" height="110" rx="8" fill="#0f131a" stroke="#95e6cb" stroke-width="1.5"/>
+  <text x="134" y="248" text-anchor="middle" font-size="12" font-weight="700" fill="#95e6cb">CONTEXT KEEPER</text>
+  <text x="134" y="266" text-anchor="middle" font-size="11" fill="#8a9199">prunes stale oversized tool output</text>
+  <text x="134" y="282" text-anchor="middle" font-size="11" fill="#8a9199">recall: search full raw transcript</text>
+  <text x="134" y="303" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">checkpoint compaction, cache-aligned</text>
+  <text x="134" y="319" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">compaction is never lossy</text>
 
-  <!-- local to watchdog and back -->
-  <path d="M110,198 L110,252" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="104" y="228" text-anchor="end" font-size="10" fill="#565b66">tool results</text>
-  <path d="M160,252 L160,198" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="167" y="228" font-size="10" fill="#565b66">hint / suggest consult</text>
+  <!-- local to keeper (session stream down, pruned view + recall back) -->
+  <path d="M120,198 L120,224" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="112" y="215" text-anchor="end" font-size="10" fill="#565b66">transcript</text>
+  <path d="M148,224 L148,198" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="156" y="215" font-size="10" fill="#565b66">pruned view + recall</text>
+
+  <!-- WATCHDOG (yellow) -->
+  <rect x="22" y="384" width="224" height="96" rx="8" fill="#0f131a" stroke="#e6b450" stroke-width="1.5"/>
+  <text x="134" y="408" text-anchor="middle" font-size="12" font-weight="700" fill="#e6b450">WATCHDOG</text>
+  <text x="134" y="426" text-anchor="middle" font-size="11" fill="#8a9199">tier 0: loop / fail-streak counters</text>
+  <text x="134" y="442" text-anchor="middle" font-size="11" fill="#8a9199">tier 1: mini-LLM verdict (optional)</text>
+  <text x="134" y="463" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">injects "Located" hints</text>
+
+  <!-- keeper to watchdog (session events observed) and hints back up -->
+  <path d="M110,334 L110,384" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="104" y="364" text-anchor="end" font-size="10" fill="#565b66">tool results</text>
+  <path d="M160,384 L160,334" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="167" y="364" font-size="10" fill="#565b66">hint / suggest consult</text>
 
   <!-- RESCUE (red) -->
-  <rect x="22" y="398" width="224" height="96" rx="8" fill="#0f131a" stroke="#f07178" stroke-width="1.5"/>
-  <text x="134" y="422" text-anchor="middle" font-size="12" font-weight="700" fill="#f07178">RESCUE CAPTURE</text>
-  <text x="134" y="440" text-anchor="middle" font-size="11" fill="#8a9199">manual /model switch = episode:</text>
-  <text x="134" y="456" text-anchor="middle" font-size="11" fill="#8a9199">failing tail + fix trajectory</text>
-  <text x="134" y="477" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">/distill makes a draft lesson</text>
+  <rect x="22" y="530" width="224" height="96" rx="8" fill="#0f131a" stroke="#f07178" stroke-width="1.5"/>
+  <text x="134" y="554" text-anchor="middle" font-size="12" font-weight="700" fill="#f07178">RESCUE CAPTURE</text>
+  <text x="134" y="572" text-anchor="middle" font-size="11" fill="#8a9199">manual /model switch = episode:</text>
+  <text x="134" y="588" text-anchor="middle" font-size="11" fill="#8a9199">failing tail + fix trajectory</text>
+  <text x="134" y="609" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">/distill makes a draft lesson</text>
 
   <!-- local to rescue (observes switches): outer channel in the column gap -->
-  <path d="M246,178 L310,178 Q318,178 318,186 L318,432 Q318,440 310,440 L246,440" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M246,178 L310,178 Q318,178 318,186 L318,568 Q318,576 310,576 L246,576" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
   <text x="288" y="170" text-anchor="middle" font-size="10" fill="#565b66">model switches</text>
 
   <!-- APPROVAL GATE (orange) -->
@@ -101,21 +115,21 @@
   <text x="470" y="50" text-anchor="middle" font-size="10" fill="#565b66">one advisory note back to the loop</text>
 
   <!-- CONSULT-LOG (purple) -->
-  <rect x="330" y="470" width="586" height="76" rx="8" fill="#0f131a" stroke="#d2a6ff" stroke-width="1.5"/>
-  <text x="623" y="494" text-anchor="middle" font-size="12" font-weight="700" fill="#d2a6ff">CONSULT-LOG: append-only JSONL</text>
-  <text x="623" y="512" text-anchor="middle" font-size="11" fill="#8a9199">requests, approvals / denials, routing overrides, staging manifests,</text>
-  <text x="623" y="528" text-anchor="middle" font-size="11" fill="#8a9199">prescreen verdicts, refusals, watchdog verdicts, rescue episodes</text>
+  <rect x="330" y="560" width="586" height="76" rx="8" fill="#0f131a" stroke="#d2a6ff" stroke-width="1.5"/>
+  <text x="623" y="584" text-anchor="middle" font-size="12" font-weight="700" fill="#d2a6ff">CONSULT-LOG: append-only JSONL</text>
+  <text x="623" y="602" text-anchor="middle" font-size="11" fill="#8a9199">requests, approvals / denials, routing overrides, staging manifests, prescreen</text>
+  <text x="623" y="618" text-anchor="middle" font-size="11" fill="#8a9199">verdicts, refusals, watchdog verdicts, rescue episodes, compactions</text>
 
   <!-- arrows into log -->
-  <path d="M450,362 L450,470" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <path d="M786,362 L786,470" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="794" y="420" font-size="10" fill="#565b66">results, usage</text>
-  <!-- watchdog to log: down the column gap, over to the log's left edge -->
-  <path d="M246,316 L286,316 Q294,316 294,324 L294,492 Q294,500 302,500 L330,500" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <!-- rescue to log -->
-  <path d="M246,466 L306,466 Q314,466 314,474 L314,514 Q314,522 322,522 L330,522" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M450,362 L450,560" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M786,362 L786,560" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="794" y="460" font-size="10" fill="#565b66">results, usage</text>
+  <!-- watchdog to log: down the column gap, over to the log left edge -->
+  <path d="M246,448 L286,448 Q294,448 294,456 L294,610 Q294,618 302,618 L330,618" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <!-- rescue to log: straight across (rescue sits beside the log row) -->
+  <path d="M246,590 L330,590" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
 
   <!-- flywheel: log, around the bottom and far-left edge, back into the local model -->
-  <path d="M420,546 L420,556 Q420,564 412,564 L18,564 Q10,564 10,556 L10,158 Q10,150 18,150 L22,150" stroke="#d2a6ff" stroke-width="1.8" fill="none" stroke-dasharray="6 4" marker-end="url(#arrowp)"/>
-  <text x="475" y="580" text-anchor="middle" font-size="11" font-weight="600" fill="#d2a6ff">fine-tune flywheel: mine episodes + labels, QLoRA the local model, consult less</text>
+  <path d="M420,636 L420,648 Q420,656 412,656 L18,656 Q10,656 10,648 L10,158 Q10,150 18,150 L22,150" stroke="#d2a6ff" stroke-width="1.8" fill="none" stroke-dasharray="6 4" marker-end="url(#arrowp)"/>
+  <text x="475" y="678" text-anchor="middle" font-size="11" font-weight="600" fill="#d2a6ff">fine-tune flywheel: mine episodes + labels, QLoRA the local model, consult less</text>
 </svg>

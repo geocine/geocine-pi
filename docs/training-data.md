@@ -11,8 +11,8 @@ correlation id (`cid`) per consultation/incident:
 `consult_request` (with approval + routing provenance) → `staging`
 (manifest, bytes) → `prescreen` (risk, triggers) → `consult_result`
 (advice, refusal flag, files-read utilization, usage), plus `watchdog`
-verdict records with their decision-time digests and `rescue` episode
-records.
+verdict records with their decision-time digests, `rescue` episode
+records, and `compaction` records (summarizer, tokens replaced, outcome).
 
 What each record type trains:
 
