@@ -44,9 +44,9 @@
   <text x="134" y="456" text-anchor="middle" font-size="11" fill="#8a9199">failing tail + fix trajectory</text>
   <text x="134" y="477" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">/distill makes a draft lesson</text>
 
-  <!-- local to rescue (observes switches) -->
-  <path d="M60,198 C44,240 44,340 60,398" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="38" y="305" text-anchor="middle" font-size="10" fill="#565b66" transform="rotate(-90 38 305)">model switches</text>
+  <!-- local to rescue (observes switches): outer channel in the column gap -->
+  <path d="M246,178 L310,178 Q318,178 318,186 L318,432 Q318,440 310,440 L246,440" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="288" y="170" text-anchor="middle" font-size="10" fill="#565b66">model switches</text>
 
   <!-- APPROVAL GATE (orange) -->
   <rect x="330" y="58" width="240" height="140" rx="8" fill="#0f131a" stroke="#ff8f40" stroke-width="1.5"/>
@@ -97,8 +97,8 @@
   <text x="613" y="290" text-anchor="middle" font-size="10" fill="#565b66">one-shot brief</text>
 
   <!-- consultants back to local (advisory) -->
-  <path d="M786,58 C786,22 220,16 142,58" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="470" y="42" text-anchor="middle" font-size="10" fill="#565b66">one advisory note back to the loop</text>
+  <path d="M786,58 L786,44 Q786,36 778,36 L150,36 Q142,36 142,44 L142,58" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="470" y="50" text-anchor="middle" font-size="10" fill="#565b66">one advisory note back to the loop</text>
 
   <!-- CONSULT-LOG (purple) -->
   <rect x="330" y="470" width="586" height="76" rx="8" fill="#0f131a" stroke="#d2a6ff" stroke-width="1.5"/>
@@ -110,10 +110,12 @@
   <path d="M450,362 L450,470" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
   <path d="M786,362 L786,470" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
   <text x="794" y="420" font-size="10" fill="#565b66">results, usage</text>
-  <path d="M246,446 L330,490" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <path d="M246,320 C300,340 310,420 330,478" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <!-- watchdog to log: down the column gap, over to the log's left edge -->
+  <path d="M246,316 L286,316 Q294,316 294,324 L294,492 Q294,500 302,500 L330,500" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <!-- rescue to log -->
+  <path d="M246,466 L306,466 Q314,466 314,474 L314,514 Q314,522 322,522 L330,522" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
 
-  <!-- flywheel: log, around the left, back into the local model -->
-  <path d="M330,535 C200,570 40,570 14,520 C2,440 2,300 22,180 C26,150 30,130 40,118" stroke="#d2a6ff" stroke-width="1.8" fill="none" stroke-dasharray="6 4" marker-end="url(#arrowp)"/>
-  <text x="475" y="575" text-anchor="middle" font-size="11" font-weight="600" fill="#d2a6ff">fine-tune flywheel: mine episodes + labels, QLoRA the local model, consult less</text>
+  <!-- flywheel: log, around the bottom and far-left edge, back into the local model -->
+  <path d="M420,546 L420,556 Q420,564 412,564 L18,564 Q10,564 10,556 L10,158 Q10,150 18,150 L22,150" stroke="#d2a6ff" stroke-width="1.8" fill="none" stroke-dasharray="6 4" marker-end="url(#arrowp)"/>
+  <text x="475" y="580" text-anchor="middle" font-size="11" font-weight="600" fill="#d2a6ff">fine-tune flywheel: mine episodes + labels, QLoRA the local model, consult less</text>
 </svg>
