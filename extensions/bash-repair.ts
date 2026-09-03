@@ -106,6 +106,8 @@ interface Failure {
 	observed?: string;
 	expected?: string;
 	detail?: string;
+	/** Actionable remedy for a known environment trap (rendered as `fix:`). */
+	fix?: string;
 	count: number;
 }
 
@@ -126,6 +128,7 @@ function render(f: Failure): string {
 	} else if (f.detail) {
 		out += `\ndetail: ${truncateField(f.detail)}`;
 	}
+	if (f.fix) out += `\nfix: ${truncateField(f.fix)}`;
 	return out;
 }
 
@@ -261,6 +264,34 @@ function detectPytest(output: string): Failure | undefined {
 	return f;
 }
 
+// --- python (plain tracebacks, e.g. heredoc scripts; pytest is separate) ---
+const pyTraceback = /Traceback \(most recent call last\):/;
+const pyFileAll = /^\s*File "([^"]+)", line (\d+)/gm;
+const pyFinalErrorAll = /^([A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt)): (.+)$/gm;
+// Windows console Python defaults stdout to the legacy codepage (cp1252),
+// so printing any non-ASCII char (arrows, checkmarks, em-dashes) dies with
+// UnicodeEncodeError. A cheap local model loops on this without a hint.
+const pyCharmap = /'(?:charmap|cp\d+)' codec can't encode/;
+
+function detectPython(output: string): Failure | undefined {
+	if (!pyTraceback.test(output)) return undefined;
+	const errs = [...output.matchAll(pyFinalErrorAll)];
+	const err = errs[errs.length - 1];
+	if (!err) return undefined;
+	const f: Failure = { runner: "python", check: `${err[1]}: ${err[2]}`, count: 1 };
+	const files = [...output.matchAll(pyFileAll)];
+	// Deepest frame that is not stdlib/site-packages: that is the user's code.
+	const isLib = (p: string) => /site-packages|[/\\]lib[/\\]|[/\\]encodings[/\\]|importlib/i.test(p);
+	const user = [...files].reverse().find((m) => !isLib(m[1]));
+	const frame = user ?? files[files.length - 1];
+	if (frame) f.location = `${frame[1]}:${frame[2]}`;
+	if (err[1] === "UnicodeEncodeError" && pyCharmap.test(err[2])) {
+		f.fix =
+			"Windows console Python uses a legacy codepage for stdout. Re-run with `python -X utf8` (or `PYTHONIOENCODING=utf-8 python ...`), or print ASCII only (no arrows/checkmarks).";
+	}
+	return f;
+}
+
 // --- node ---
 const nodeAssert = /AssertionError(?: \[ERR_ASSERTION\])?: ([^\n]+)/;
 const nodeError = /^((?:[A-Z][A-Za-z]*)?Error): (.+)$/m;
@@ -289,7 +320,7 @@ function detectNode(output: string): Failure | undefined {
 }
 
 export function summarize(output: string): string | undefined {
-	for (const detect of [detectGoTest, detectCargo, detectPytest, detectGoBuild, detectNode]) {
+	for (const detect of [detectGoTest, detectCargo, detectPytest, detectPython, detectGoBuild, detectNode]) {
 		const f = detect(output);
 		if (f) return render(f);
 	}
