@@ -3,13 +3,27 @@
 	"version": "0.1.0",
 	"description": "Local-first pi plugin set: cheap local worker, evidence-triggered consultation of stronger models, jailed context-capped consults, and decision logging for future fine-tuning.",
 	"type": "module",
-	"keywords": ["pi-package"],
+	"keywords": [
+		"pi-package"
+	],
 	"pi": {
-		"extensions": ["./extensions"]
+		"extensions": [
+			"./extensions"
+		]
+	},
+	"scripts": {
+		"check": "tsc --noEmit"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-ai": "*",
 		"@earendil-works/pi-coding-agent": "*",
 		"typebox": "*"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-ai": "^0.84.4",
+		"@earendil-works/pi-coding-agent": "^0.84.4",
+		"@types/node": "^22",
+		"typebox": "^1.3.25",
+		"typescript": "^7.0.2"
 	}
 }
