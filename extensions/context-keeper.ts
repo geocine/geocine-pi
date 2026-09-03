@@ -199,7 +199,7 @@ const CHECKPOINT_INSTRUCTION = [
 	"- Capture user feedback and explicit corrections faithfully.",
 	"- Do NOT mention this summarization request or that the context was compacted.",
 	"- Output only the checkpoint text: do not call any tool.",
-	"- If a PRIOR CHECKPOINT is present above, do not copy it verbatim: keep still-true facts, drop stale ones, and merge newer information into one consolidated checkpoint.",
+	"- If the conversation above starts with an earlier compaction summary (a <summary> block), do not copy it verbatim: keep still-true facts, drop stale ones, and merge newer information into one consolidated checkpoint.",
 ].join("\n");
 
 const RECALL_FOOTER =
@@ -363,16 +363,22 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		try {
 			// Prefix-cache alignment: same system prompt, the actual
 			// conversation messages, then the instruction as the only novel
-			// suffix. A prior checkpoint is replayed first, matching how pi
-			// rebuilds context after a previous compaction.
-			const llmMessages = convertToLlm(all);
+			// suffix. A prior summary must be replayed EXACTLY as the live
+			// context renders it (pi wraps it as a user message with a fixed
+			// prefix/suffix): any wording difference in this first message
+			// invalidates the provider cache at position 0, turning every
+			// compaction into a full re-ingest on a local server. Building
+			// the same compactionSummary message pi uses and letting
+			// convertToLlm render it guarantees byte identity.
 			if (previousSummary) {
-				llmMessages.unshift({
-					role: "user",
-					content: [{ type: "text", text: `PRIOR CHECKPOINT (from an earlier compaction):\n${previousSummary}` }],
+				all.unshift({
+					role: "compactionSummary",
+					summary: previousSummary,
+					tokensBefore: 0,
 					timestamp: Date.now(),
-				} as (typeof llmMessages)[number]);
+				} as (typeof all)[number]);
 			}
+			const llmMessages = convertToLlm(all);
 			const instructions = event.customInstructions ? `\n\nAdditional focus requested by the user: ${event.customInstructions}` : "";
 			llmMessages.push({
 				role: "user",
