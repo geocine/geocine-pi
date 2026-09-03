@@ -331,6 +331,17 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		}
 		if (!model) return;
 
+		// Elapsed ticker in the footer status bar. The core "Compacting
+		// context..." spinner line is not writable from an extension, so the
+		// footer carries the timer instead.
+		const fmtElapsed = () => {
+			const seconds = Math.round((Date.now() - started) / 1000);
+			return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s` : `${seconds}s`;
+		};
+		const ticker = setInterval(() => {
+			ctx.ui.setStatus("context-keeper", `compacting ${fmtElapsed()}`);
+		}, 1000);
+
 		const log = (outcome: "custom" | "fallback_empty" | "fallback_error" | "fallback_not_smaller", summaryChars: number, error?: string) => {
 			appendRecord(logDir(loadConfig(ctx.cwd)), {
 				type: "compaction",
@@ -408,6 +419,9 @@ export default function contextKeeper(pi: ExtensionAPI) {
 				ctx.ui.notify(`Checkpoint compaction failed (${message}); using pi default`, "warning");
 			}
 			return; // pi default takes over
+		} finally {
+			clearInterval(ticker);
+			ctx.ui.setStatus("context-keeper", `last compaction ${fmtElapsed()}`);
 		}
 	});
 }
