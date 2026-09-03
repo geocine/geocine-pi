@@ -1,116 +1,119 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 590" font-family="ui-sans-serif, system-ui, 'Segoe UI', sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+      <path d="M0,0 L10,5 L0,10 z" fill="#565b66"/>
     </marker>
     <marker id="arrowp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#9333ea"/>
+      <path d="M0,0 L10,5 L0,10 z" fill="#d2a6ff"/>
     </marker>
   </defs>
 
+  <!-- ayu dark background -->
+  <rect x="0" y="0" width="940" height="590" rx="12" fill="#0b0e14"/>
+
   <!-- title -->
-  <text x="470" y="26" text-anchor="middle" font-size="17" font-weight="700" fill="#64748b">geocine-pi: local-first loop, evidence-gated escalation</text>
+  <text x="470" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#bfbdb6">geocine-pi: local-first loop, evidence-gated escalation</text>
 
-  <!-- LOCAL MODEL -->
-  <rect x="22" y="58" width="224" height="140" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
-  <text x="134" y="84" text-anchor="middle" font-size="14" font-weight="700" fill="#14532d">LOCAL MODEL</text>
-  <text x="134" y="102" text-anchor="middle" font-size="11" fill="#166534">Qwen / llama.cpp, owns the loop</text>
-  <line x1="40" y1="112" x2="228" y2="112" stroke="#86efac" stroke-width="1"/>
-  <text x="134" y="130" text-anchor="middle" font-size="11" fill="#166534">qwen-harness: tool-call repair</text>
-  <text x="134" y="147" text-anchor="middle" font-size="11" fill="#166534">bash-repair: failfmt + hygiene</text>
-  <text x="134" y="164" text-anchor="middle" font-size="11" fill="#166534">/qwen thinking control</text>
-  <text x="134" y="186" text-anchor="middle" font-size="10" font-style="italic" fill="#15803d">cheap, always on</text>
+  <!-- LOCAL MODEL (green) -->
+  <rect x="22" y="58" width="224" height="140" rx="8" fill="#0f131a" stroke="#aad94c" stroke-width="1.5"/>
+  <text x="134" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#aad94c">LOCAL MODEL</text>
+  <text x="134" y="102" text-anchor="middle" font-size="11" fill="#bfbdb6">Qwen / llama.cpp, owns the loop</text>
+  <line x1="40" y1="112" x2="228" y2="112" stroke="#1c212b" stroke-width="1"/>
+  <text x="134" y="130" text-anchor="middle" font-size="11" fill="#8a9199">qwen-harness: tool-call repair</text>
+  <text x="134" y="147" text-anchor="middle" font-size="11" fill="#8a9199">bash-repair: failfmt + hygiene</text>
+  <text x="134" y="164" text-anchor="middle" font-size="11" fill="#8a9199">/qwen thinking control</text>
+  <text x="134" y="186" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">cheap, always on</text>
 
-  <!-- WATCHDOG -->
-  <rect x="22" y="252" width="224" height="96" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
-  <text x="134" y="276" text-anchor="middle" font-size="13" font-weight="700" fill="#713f12">WATCHDOG</text>
-  <text x="134" y="294" text-anchor="middle" font-size="11" fill="#854d0e">tier 0: loop / fail-streak counters</text>
-  <text x="134" y="310" text-anchor="middle" font-size="11" fill="#854d0e">tier 1: mini-LLM verdict (optional)</text>
-  <text x="134" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#a16207">injects "Located" hints</text>
+  <!-- WATCHDOG (yellow) -->
+  <rect x="22" y="252" width="224" height="96" rx="8" fill="#0f131a" stroke="#e6b450" stroke-width="1.5"/>
+  <text x="134" y="276" text-anchor="middle" font-size="12" font-weight="700" fill="#e6b450">WATCHDOG</text>
+  <text x="134" y="294" text-anchor="middle" font-size="11" fill="#8a9199">tier 0: loop / fail-streak counters</text>
+  <text x="134" y="310" text-anchor="middle" font-size="11" fill="#8a9199">tier 1: mini-LLM verdict (optional)</text>
+  <text x="134" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">injects "Located" hints</text>
 
   <!-- local to watchdog and back -->
-  <path d="M110,198 L110,252" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="104" y="228" text-anchor="end" font-size="10" fill="#64748b">tool results</text>
-  <path d="M160,252 L160,198" stroke="#64748b" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="167" y="228" font-size="10" fill="#64748b">hint / suggest consult</text>
+  <path d="M110,198 L110,252" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="104" y="228" text-anchor="end" font-size="10" fill="#565b66">tool results</text>
+  <path d="M160,252 L160,198" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="167" y="228" font-size="10" fill="#565b66">hint / suggest consult</text>
 
-  <!-- RESCUE -->
-  <rect x="22" y="398" width="224" height="96" rx="10" fill="#fce7f3" stroke="#db2777" stroke-width="1.5"/>
-  <text x="134" y="422" text-anchor="middle" font-size="13" font-weight="700" fill="#831843">RESCUE CAPTURE</text>
-  <text x="134" y="440" text-anchor="middle" font-size="11" fill="#9d174d">manual /model switch = episode:</text>
-  <text x="134" y="456" text-anchor="middle" font-size="11" fill="#9d174d">failing tail + fix trajectory</text>
-  <text x="134" y="477" text-anchor="middle" font-size="10" font-style="italic" fill="#be185d">/distill makes a draft lesson</text>
+  <!-- RESCUE (red) -->
+  <rect x="22" y="398" width="224" height="96" rx="8" fill="#0f131a" stroke="#f07178" stroke-width="1.5"/>
+  <text x="134" y="422" text-anchor="middle" font-size="12" font-weight="700" fill="#f07178">RESCUE CAPTURE</text>
+  <text x="134" y="440" text-anchor="middle" font-size="11" fill="#8a9199">manual /model switch = episode:</text>
+  <text x="134" y="456" text-anchor="middle" font-size="11" fill="#8a9199">failing tail + fix trajectory</text>
+  <text x="134" y="477" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">/distill makes a draft lesson</text>
 
   <!-- local to rescue (observes switches) -->
-  <path d="M60,198 C44,240 44,340 60,398" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="38" y="305" text-anchor="middle" font-size="10" fill="#64748b" transform="rotate(-90 38 305)">model switches</text>
+  <path d="M60,198 C44,240 44,340 60,398" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="38" y="305" text-anchor="middle" font-size="10" fill="#565b66" transform="rotate(-90 38 305)">model switches</text>
 
-  <!-- APPROVAL GATE -->
-  <rect x="330" y="58" width="240" height="140" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
-  <text x="450" y="84" text-anchor="middle" font-size="14" font-weight="700" fill="#7f1d1d">APPROVAL GATE</text>
-  <text x="450" y="102" text-anchor="middle" font-size="11" fill="#991b1b">model proposes a rescuer by role</text>
-  <line x1="348" y1="112" x2="552" y2="112" stroke="#fca5a5" stroke-width="1"/>
-  <text x="450" y="130" text-anchor="middle" font-size="11" fill="#991b1b">use proposed / pick another</text>
-  <text x="450" y="147" text-anchor="middle" font-size="11" fill="#991b1b">deny / always-allow / auto</text>
-  <text x="450" y="169" text-anchor="middle" font-size="10" font-style="italic" fill="#b91c1c">denials + overrides = routing labels</text>
+  <!-- APPROVAL GATE (orange) -->
+  <rect x="330" y="58" width="240" height="140" rx="8" fill="#0f131a" stroke="#ff8f40" stroke-width="1.5"/>
+  <text x="450" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#ff8f40">APPROVAL GATE</text>
+  <text x="450" y="102" text-anchor="middle" font-size="11" fill="#bfbdb6">model proposes a rescuer by role</text>
+  <line x1="348" y1="112" x2="552" y2="112" stroke="#1c212b" stroke-width="1"/>
+  <text x="450" y="130" text-anchor="middle" font-size="11" fill="#8a9199">use proposed / pick another</text>
+  <text x="450" y="147" text-anchor="middle" font-size="11" fill="#8a9199">deny / always-allow / auto</text>
+  <text x="450" y="169" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">denials + overrides = routing labels</text>
 
   <!-- local to gate -->
-  <path d="M246,110 L330,110" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="288" y="100" text-anchor="middle" font-size="10" fill="#64748b">consult tool</text>
+  <path d="M246,110 L330,110" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="288" y="100" text-anchor="middle" font-size="10" fill="#565b66">consult tool</text>
 
-  <!-- STAGED JAIL -->
-  <rect x="330" y="252" width="240" height="110" rx="10" fill="#ffedd5" stroke="#ea580c" stroke-width="1.5"/>
-  <text x="450" y="276" text-anchor="middle" font-size="13" font-weight="700" fill="#7c2d12">STAGED JAIL</text>
-  <text x="450" y="294" text-anchor="middle" font-size="11" fill="#9a3412">temp dir with ONLY staged files</text>
-  <text x="450" y="310" text-anchor="middle" font-size="11" fill="#9a3412">= hard cap on input tokens</text>
-  <text x="450" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#c2410c">optional local guardrail prescreen</text>
-  <text x="450" y="347" text-anchor="middle" font-size="10" font-style="italic" fill="#c2410c">optional docker container</text>
+  <!-- STAGED JAIL (cyan) -->
+  <rect x="330" y="252" width="240" height="110" rx="8" fill="#0f131a" stroke="#39bae6" stroke-width="1.5"/>
+  <text x="450" y="276" text-anchor="middle" font-size="12" font-weight="700" fill="#39bae6">STAGED JAIL</text>
+  <text x="450" y="294" text-anchor="middle" font-size="11" fill="#8a9199">temp dir with ONLY staged files</text>
+  <text x="450" y="310" text-anchor="middle" font-size="11" fill="#8a9199">= hard cap on input tokens</text>
+  <text x="450" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">optional local guardrail prescreen</text>
+  <text x="450" y="347" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">optional docker container</text>
 
   <!-- gate to jail -->
-  <path d="M450,198 L450,252" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="458" y="228" font-size="10" fill="#64748b">approved</text>
+  <path d="M450,198 L450,252" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="458" y="228" font-size="10" fill="#565b66">approved</text>
 
-  <!-- CONSULTANTS -->
-  <rect x="656" y="58" width="260" height="304" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
-  <text x="786" y="84" text-anchor="middle" font-size="14" font-weight="700" fill="#1e3a8a">CONSULTANTS (roles)</text>
+  <!-- CONSULTANTS (blue) -->
+  <rect x="656" y="58" width="260" height="304" rx="8" fill="#0f131a" stroke="#59c2ff" stroke-width="1.5"/>
+  <text x="786" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#59c2ff">CONSULTANTS (roles)</text>
 
-  <rect x="672" y="100" width="228" height="70" rx="7" fill="#eff6ff" stroke="#3b82f6" stroke-width="1"/>
-  <text x="786" y="120" text-anchor="middle" font-size="12" font-weight="600" fill="#1e3a8a">frontier: grok-4.6 (OAuth)</text>
-  <text x="786" y="137" text-anchor="middle" font-size="10" fill="#1d4ed8">hard debugging, root cause, planning</text>
-  <text x="786" y="153" text-anchor="middle" font-size="10" fill="#1d4ed8">staged jail + prescreen</text>
+  <rect x="672" y="100" width="228" height="70" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="786" y="120" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">frontier: grok-4.6 (OAuth)</text>
+  <text x="786" y="137" text-anchor="middle" font-size="10" fill="#8a9199">hard debugging, root cause, planning</text>
+  <text x="786" y="153" text-anchor="middle" font-size="10" fill="#565b66">staged jail + prescreen</text>
 
-  <rect x="672" y="182" width="228" height="70" rx="7" fill="#eff6ff" stroke="#3b82f6" stroke-width="1"/>
-  <text x="786" y="202" text-anchor="middle" font-size="12" font-weight="600" fill="#1e3a8a">local-big: Qwen 27B</text>
-  <text x="786" y="219" text-anchor="middle" font-size="10" fill="#1d4ed8">free second opinion, sanity checks</text>
-  <text x="786" y="235" text-anchor="middle" font-size="10" fill="#1d4ed8">runs in place, read-only</text>
+  <rect x="672" y="182" width="228" height="70" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="786" y="202" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">local-big: Qwen 27B</text>
+  <text x="786" y="219" text-anchor="middle" font-size="10" fill="#8a9199">free second opinion, sanity checks</text>
+  <text x="786" y="235" text-anchor="middle" font-size="10" fill="#565b66">runs in place, read-only</text>
 
-  <rect x="672" y="264" width="228" height="70" rx="7" fill="#eff6ff" stroke="#3b82f6" stroke-width="1"/>
-  <text x="786" y="284" text-anchor="middle" font-size="12" font-weight="600" fill="#1e3a8a">abliterated: lenient</text>
-  <text x="786" y="301" text-anchor="middle" font-size="10" fill="#1d4ed8">content strict models falsely refuse</text>
-  <text x="786" y="317" text-anchor="middle" font-size="10" fill="#1d4ed8">RE, security, decompiled code</text>
+  <rect x="672" y="264" width="228" height="70" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="786" y="284" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">abliterated: lenient</text>
+  <text x="786" y="301" text-anchor="middle" font-size="10" fill="#8a9199">content strict models falsely refuse</text>
+  <text x="786" y="317" text-anchor="middle" font-size="10" fill="#565b66">RE, security, decompiled code</text>
 
   <!-- jail to consultants -->
-  <path d="M570,300 L656,300" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="613" y="290" text-anchor="middle" font-size="10" fill="#64748b">one-shot brief</text>
+  <path d="M570,300 L656,300" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="613" y="290" text-anchor="middle" font-size="10" fill="#565b66">one-shot brief</text>
 
   <!-- consultants back to local (advisory) -->
-  <path d="M786,58 C786,22 220,16 142,58" stroke="#64748b" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="470" y="42" text-anchor="middle" font-size="10" fill="#64748b">one advisory note back to the loop</text>
+  <path d="M786,58 C786,22 220,16 142,58" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="470" y="42" text-anchor="middle" font-size="10" fill="#565b66">one advisory note back to the loop</text>
 
-  <!-- CONSULT-LOG -->
-  <rect x="330" y="470" width="586" height="76" rx="10" fill="#f3e8ff" stroke="#9333ea" stroke-width="1.5"/>
-  <text x="623" y="494" text-anchor="middle" font-size="13" font-weight="700" fill="#581c87">CONSULT-LOG: append-only JSONL</text>
-  <text x="623" y="512" text-anchor="middle" font-size="11" fill="#6b21a8">requests, approvals / denials, routing overrides, staging manifests,</text>
-  <text x="623" y="528" text-anchor="middle" font-size="11" fill="#6b21a8">prescreen verdicts, refusals, watchdog verdicts, rescue episodes</text>
+  <!-- CONSULT-LOG (purple) -->
+  <rect x="330" y="470" width="586" height="76" rx="8" fill="#0f131a" stroke="#d2a6ff" stroke-width="1.5"/>
+  <text x="623" y="494" text-anchor="middle" font-size="12" font-weight="700" fill="#d2a6ff">CONSULT-LOG: append-only JSONL</text>
+  <text x="623" y="512" text-anchor="middle" font-size="11" fill="#8a9199">requests, approvals / denials, routing overrides, staging manifests,</text>
+  <text x="623" y="528" text-anchor="middle" font-size="11" fill="#8a9199">prescreen verdicts, refusals, watchdog verdicts, rescue episodes</text>
 
   <!-- arrows into log -->
-  <path d="M450,362 L450,470" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <path d="M786,362 L786,470" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="794" y="420" font-size="10" fill="#64748b">results, usage</text>
-  <path d="M246,446 L330,490" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <path d="M246,320 C300,340 310,420 330,478" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M450,362 L450,470" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M786,362 L786,470" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="794" y="420" font-size="10" fill="#565b66">results, usage</text>
+  <path d="M246,446 L330,490" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <path d="M246,320 C300,340 310,420 330,478" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
 
   <!-- flywheel: log, around the left, back into the local model -->
-  <path d="M330,535 C200,570 40,570 14,520 C2,440 2,300 22,180 C26,150 30,130 40,118" stroke="#9333ea" stroke-width="2" fill="none" stroke-dasharray="6 4" marker-end="url(#arrowp)"/>
-  <text x="475" y="575" text-anchor="middle" font-size="11" font-weight="600" fill="#9333ea">fine-tune flywheel: mine episodes + labels, QLoRA the local model, consult less</text>
+  <path d="M330,535 C200,570 40,570 14,520 C2,440 2,300 22,180 C26,150 30,130 40,118" stroke="#d2a6ff" stroke-width="1.8" fill="none" stroke-dasharray="6 4" marker-end="url(#arrowp)"/>
+  <text x="475" y="575" text-anchor="middle" font-size="11" font-weight="600" fill="#d2a6ff">fine-tune flywheel: mine episodes + labels, QLoRA the local model, consult less</text>
 </svg>
