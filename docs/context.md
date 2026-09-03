@@ -47,11 +47,20 @@ How the engines decide:
 - **ACM** (paper above): keeps the working set at 20–60k tokens with
   proactive "sawtooth" compaction well before any hard limit.
 
-`context.compactAtTokens` adds the dsh/ACM-style early trigger: after each
-turn, if the context exceeds the threshold **and a local provider is
-active** (`rescue.localProviders`), the keeper calls compaction itself.
-60000 is a good default for ~500 tok/s hardware. Cloud models are left to
-pi's own threshold.
+`context.compactAtTokens` adds the dsh/ACM-style early trigger: when an
+agent run settles, if the context exceeds the threshold **and a local
+provider is active** (`rescue.localProviders`), the keeper calls compaction
+itself. 60000 is a good default for ~500 tok/s hardware. Cloud models are
+left to pi's own threshold.
+
+It deliberately waits for the run to settle rather than firing between
+turns: mid-run the next LLM request is already in flight and an extension-
+initiated compaction aborts it, killing the run. (pi's native threshold
+compacts between requests inside the agent loop, but its `reserveTokens`
+setting is global — a value tuned for a 262k local window would make small-
+window cloud models compact constantly.) A run can therefore overshoot the
+threshold by however much its tool loop adds; that overshoot is compacted
+away as soon as the run ends.
 
 **Hybrid recurrent models (Qwen3.8 class) make this critical.** Their
 recurrent state cannot be partially rolled back like a standard KV cache:

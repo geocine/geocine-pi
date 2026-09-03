@@ -211,7 +211,13 @@ export default function contextKeeper(pi: ExtensionAPI) {
 	// context token is paid again at prompt-processing speed whenever the
 	// cache misses (and hybrid recurrent models like Qwen3.8 miss hard:
 	// prior-turn <think> stripping diverges the prompt every turn). Trigger
-	// early, dsh/ACM-style, while a local provider is active. --
+	// early, dsh/ACM-style, while a local provider is active.
+	//
+	// Fires on agent_settled, NOT turn_end: mid-run the next LLM request is
+	// already in flight, and compact() aborts it ("This operation was
+	// aborted" + a dead run). Settled = nothing in flight, compaction is
+	// free to run. reserveTokens can't do this natively: it is global, and
+	// a value tuned for a 262k local window breaks smaller cloud models. --
 	let compactPending = false;
 	pi.on("session_compact", () => {
 		compactPending = false;
@@ -219,7 +225,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 	pi.on("session_compact_failed", () => {
 		compactPending = false;
 	});
-	pi.on("turn_end", async (_event, ctx) => {
+	pi.on("agent_settled", async (_event, ctx) => {
 		const full = loadConfig(ctx.cwd);
 		const at = full.context?.compactAtTokens;
 		if (!at || at <= 0 || compactPending) return;
