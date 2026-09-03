@@ -37,7 +37,7 @@ import {
 	nowIso,
 	type StagedFile,
 } from "../lib/consult-log.ts";
-import { looksLikeRefusal, runPi, type PiRunResult } from "../lib/pi-exec.ts";
+import { looksLikeRefusal, runPi, type PiProgress, type PiRunResult } from "../lib/pi-exec.ts";
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 const MAX_STAGED_FILE_BYTES = 256 * 1024;
@@ -118,6 +118,8 @@ function buildBriefing(params: {
 	stagedFiles?: StagedFile[];
 	inPlaceFiles?: string[];
 	reframe?: string;
+	/** True when a staged jail ended up with zero files: pure Q&A, no workspace. */
+	noWorkspace?: boolean;
 }): string {
 	const parts: string[] = [];
 	parts.push(
@@ -137,6 +139,11 @@ function buildBriefing(params: {
 	if (params.inPlaceFiles && params.inPlaceFiles.length > 0) {
 		parts.push(
 			`Start from these files (stay focused on them; do not explore broadly):\n${params.inPlaceFiles.map((f) => `- ${f}`).join("\n")}`,
+		);
+	}
+	if (params.noWorkspace) {
+		parts.push(
+			"No files accompany this consultation — there is no workspace to inspect, so do not look for one or treat its absence as a problem. Answer from the QUESTION and background above. If specific files are essential to a confident answer, name the exact paths or content you need in your ADVICE so they can be staged in a follow-up.",
 		);
 	}
 	parts.push(`QUESTION:\n${params.question}`);
@@ -357,6 +364,7 @@ async function consult(
 	notify: (msg: string) => void,
 	approval: Approval,
 	routing?: { proposedConsultant: string; chosenBy: ChosenBy },
+	onProgress?: (progress: PiProgress) => void,
 ): Promise<ConsultOutcome> {
 	const dir = logDir(cfg);
 	const cwd = ctx.cwd;
@@ -394,9 +402,15 @@ async function consult(
 		});
 	}
 
-	// 2. Pre-screen (strict consultants only).
+	// A staged jail with zero files is pure Q&A: no workspace to inspect,
+	// so no read tools either (an empty dir just confuses the consultant
+	// into reviewing the absence of files instead of the question).
+	const noWorkspace = staging !== undefined && staging.files.length === 0;
+
+	// 2. Pre-screen (strict consultants only; nothing to screen when no
+	// files were staged — the question text alone travels regardless).
 	let reframe: string | undefined;
-	if (consultant.prescreen && staging) {
+	if (consultant.prescreen && staging && !noWorkspace) {
 		notify(`consult: pre-screening ${staging.files.length} staged file(s) locally…`);
 		const verdict = await prescreen(cfg, cwd, staging, question, signal);
 		appendRecord(dir, {
@@ -438,6 +452,7 @@ async function consult(
 		stagedFiles: staging?.files,
 		inPlaceFiles: jail === "none" ? fileSpecs : undefined,
 		reframe,
+		noWorkspace,
 	});
 
 	const runCwd = staging ? staging.dir : cwd;
@@ -447,10 +462,11 @@ async function consult(
 		provider: consultant.provider,
 		model: consultant.model,
 		thinking: consultant.thinking,
-		tools: READ_ONLY_TOOLS,
+		tools: noWorkspace ? [] : READ_ONLY_TOOLS,
 		prompt: briefing,
 		timeoutMs: 900_000,
 		signal,
+		onProgress,
 		docker:
 			jail === "docker"
 				? { image: cfg.docker?.image ?? "geocine-consult", envKeys: consultant.envKeys }
@@ -558,7 +574,7 @@ export default function advisor(pi: ExtensionAPI) {
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const cfg = loadConfig(ctx.cwd);
 			const resolved = resolveConsultant(cfg, params.consultant);
 			if ("error" in resolved) {
@@ -609,6 +625,22 @@ export default function advisor(pi: ExtensionAPI) {
 				ctx.ui.notify(`Rescuer overridden: ${resolved.name} → ${gate.name}`, "info");
 			}
 
+			// Stream the consultant's thinking/answer into the tool display
+			// so the wait is observable instead of a spinner.
+			const streamProgress = onUpdate
+				? (p: PiProgress) => {
+						const body =
+							p.phase === "tool"
+								? `→ using tool: ${p.text}`
+								: p.text.length > 1500
+									? `…${p.text.slice(-1500)}`
+									: p.text;
+						onUpdate({
+							content: [{ type: "text", text: `[${gate.name} · turn ${p.turn} · ${p.phase}]\n${body}` }],
+							details: { cid, consultant: gate.name, streaming: true },
+						});
+					}
+				: undefined;
 			const outcome = await consult(
 				cfg,
 				ctx,
@@ -623,6 +655,7 @@ export default function advisor(pi: ExtensionAPI) {
 				(msg) => ctx.ui.setStatus("advisor", msg),
 				gate.approval,
 				{ proposedConsultant: resolved.name, chosenBy: gate.chosenBy },
+				streamProgress,
 			);
 			ctx.ui.setStatus("advisor", undefined);
 			return {
@@ -640,11 +673,12 @@ export default function advisor(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("consult", {
-		description: "Consult a stronger model: /consult [@consultant] <question> (stages nothing; consultant reads in place if lenient)",
+		description:
+			'Consult a stronger model: /consult [@consultant] [+file[:a-b] …] <question>. "+" tokens stage files for the consultant (e.g. +docs/outline.md +src/foo.ts:40-120); without them a staged-jail consultant answers from the question alone.',
 		handler: async (args, ctx) => {
 			const raw = String(args ?? "").trim();
 			if (!raw) {
-				ctx.ui.notify("Usage: /consult [@consultant] <question>", "error");
+				ctx.ui.notify("Usage: /consult [@consultant] [+file[:a-b] …] <question>", "error");
 				return;
 			}
 			let consultantName: string | undefined;
@@ -654,6 +688,19 @@ export default function advisor(pi: ExtensionAPI) {
 				consultantName = at[1];
 				question = at[2];
 			}
+			// "+path" tokens anywhere in the question are file specs to stage.
+			const fileSpecs: string[] = [];
+			question = question
+				.replace(/(^|\s)\+(\S+)/g, (_all, pre: string, spec: string) => {
+					fileSpecs.push(spec);
+					return pre ? " " : "";
+				})
+				.replace(/\s+/g, " ")
+				.trim();
+			if (!question) {
+				ctx.ui.notify("Usage: /consult [@consultant] [+file[:a-b] …] <question> — a question is required.", "error");
+				return;
+			}
 			const cfg = loadConfig(ctx.cwd);
 			const resolved = resolveConsultant(cfg, consultantName);
 			if ("error" in resolved) {
@@ -661,7 +708,10 @@ export default function advisor(pi: ExtensionAPI) {
 				return;
 			}
 			const cid = newCid();
-			ctx.ui.notify(`Consulting ${resolved.name}…`, "info");
+			ctx.ui.notify(
+				`Consulting ${resolved.name}${fileSpecs.length ? ` (staging ${fileSpecs.length} file(s))` : ""}…`,
+				"info",
+			);
 			const outcome = await consult(
 				cfg,
 				ctx,
@@ -670,11 +720,17 @@ export default function advisor(pi: ExtensionAPI) {
 				resolved.name,
 				resolved.consultant,
 				question,
-				[],
+				fileSpecs,
 				undefined,
 				undefined,
 				(msg) => ctx.ui.setStatus("advisor", msg),
 				"user_command",
+				undefined,
+				// Stream the consultant's live thinking/answer into the footer.
+				(p) => {
+					const tail = p.text.replace(/\s+/g, " ").trim().slice(-90);
+					ctx.ui.setStatus("advisor", `${resolved.name} · ${p.phase}${p.phase === "tool" ? ` ${p.text}` : `: …${tail}`}`);
+				},
 			);
 			ctx.ui.setStatus("advisor", undefined);
 			// Deliver the advisory into the worker transcript so the model sees it.

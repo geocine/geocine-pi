@@ -8,6 +8,15 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+export interface PiProgress {
+	/** What the child is currently producing. */
+	phase: "thinking" | "answer" | "tool";
+	/** Accumulated text of the current thinking/answer block, or the tool name. */
+	text: string;
+	/** 1-based turn currently streaming. */
+	turn: number;
+}
+
 export interface PiRunOptions {
 	cwd: string;
 	provider?: string;
@@ -21,6 +30,8 @@ export interface PiRunOptions {
 	signal?: AbortSignal;
 	/** Run inside the docker jail: cwd is mounted at /work. */
 	docker?: { image: string; envKeys?: string[] };
+	/** Streaming progress (thinking/answer deltas, tool starts), throttled. */
+	onProgress?: (progress: PiProgress) => void;
 }
 
 export interface PiToolCall {
@@ -102,12 +113,50 @@ export async function runPi(options: PiRunOptions): Promise<PiRunResult> {
 		options.signal?.addEventListener("abort", onAbort, { once: true });
 
 		let buffer = "";
+		// Streaming state for onProgress: accumulate the current block's
+		// deltas, throttle emits so the host TUI is not re-rendered per token.
+		let streamText = "";
+		let streamPhase: "thinking" | "answer" = "answer";
+		let lastEmit = 0;
+		const emitProgress = (phase: "thinking" | "answer" | "tool", text: string, force = false) => {
+			if (!options.onProgress) return;
+			const now = Date.now();
+			if (!force && now - lastEmit < 250) return;
+			lastEmit = now;
+			options.onProgress({ phase, text, turn: result.turns + 1 });
+		};
 		const handleLine = (line: string) => {
 			if (!line.trim()) return;
 			let event: any;
 			try {
 				event = JSON.parse(line);
 			} catch {
+				return;
+			}
+			if (event.type === "message_update" && options.onProgress) {
+				const ame = event.assistantMessageEvent;
+				if (!ame) return;
+				if (ame.type === "start") {
+					streamText = "";
+				} else if (ame.type === "thinking_delta") {
+					if (streamPhase !== "thinking") {
+						streamPhase = "thinking";
+						streamText = "";
+					}
+					streamText += ame.delta ?? "";
+					emitProgress("thinking", streamText);
+				} else if (ame.type === "text_delta") {
+					if (streamPhase !== "answer") {
+						streamPhase = "answer";
+						streamText = "";
+					}
+					streamText += ame.delta ?? "";
+					emitProgress("answer", streamText);
+				} else if (ame.type === "thinking_end" || ame.type === "text_end") {
+					emitProgress(streamPhase, ame.content ?? streamText, true);
+				} else if (ame.type === "toolcall_start") {
+					emitProgress("tool", String(ame.toolName ?? "tool"), true);
+				}
 				return;
 			}
 			if (event.type !== "message_end" || !event.message) return;
