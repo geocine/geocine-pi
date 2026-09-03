@@ -29,7 +29,7 @@
   <text x="134" y="248" text-anchor="middle" font-size="12" font-weight="700" fill="#95e6cb">CONTEXT KEEPER</text>
   <text x="134" y="266" text-anchor="middle" font-size="11" fill="#8a9199">prunes stale oversized tool output</text>
   <text x="134" y="282" text-anchor="middle" font-size="11" fill="#8a9199">recall: search full raw transcript</text>
-  <text x="134" y="303" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">checkpoint compaction, cache-aligned</text>
+  <text x="134" y="303" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">deterministic ARC digest, no model call</text>
   <text x="134" y="319" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">compaction is never lossy</text>
 
   <!-- local to keeper (session stream down, pruned view + recall back) -->

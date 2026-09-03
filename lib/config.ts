@@ -100,14 +100,20 @@ export interface RescueConfig {
 
 export interface ContextConfig {
 	/**
-	 * Replace pi's default compaction summary with the structured checkpoint
-	 * (prefix-cache-aligned summarization + shrink guarantee). Default true.
+	 * Compaction summary style. Default "arc".
+	 * - "arc": deterministic digest (ARC-style) — no model call, instant,
+	 *   no paraphrase loss; the recall tool recovers exact content.
+	 * - "checkpoint": LLM-written structured checkpoint (prefix-cache-
+	 *   aligned summarization + shrink guarantee). Slower but narrative.
+	 * - "off": pi's default compaction.
 	 */
+	mode?: "arc" | "checkpoint" | "off";
+	/** @deprecated Legacy toggle: false = mode "off". Use `mode` instead. */
 	checkpoint?: boolean;
 	/**
-	 * Consultant name (from consultants) whose model writes the checkpoint.
-	 * Default: the session's own model — for a local model this keeps the
-	 * summarization call on the warm KV cache, making it nearly free.
+	 * Consultant name (from consultants) whose model writes the checkpoint
+	 * (mode "checkpoint" only). Default: the session's own model — for a
+	 * local model this keeps the call on the warm KV cache.
 	 */
 	summarizer?: string;
 	/** Max tokens for the checkpoint summary. Default 4096. */
@@ -122,13 +128,17 @@ export interface ContextConfig {
 	 */
 	compactAtTokens?: number;
 	/**
-	 * Deterministic head/tail pruning of OLD oversized tool results before
-	 * each LLM call (model-free; the session log keeps the full output and
-	 * the recall tool can still search it). Default FALSE: every newly
-	 * pruned result changes the prompt mid-context, which costs a partial
-	 * re-ingest on standard KV models and a near-FULL re-ingest on hybrid
-	 * recurrent models (Qwen3.8 class) — enable only for providers with
-	 * cheap prompt processing.
+	 * Also compact after this many minutes of idleness once the context is
+	 * past half of compactAtTokens (dsh compactNow(): pay the compaction
+	 * cost while nobody is waiting). Unset/0 disables.
+	 */
+	idleCompactMinutes?: number;
+	/**
+	 * Ingestion-time pruning (TokenPilot-style): oversized bash/powershell
+	 * outputs are head/tail-trimmed ONCE, when captured, so they never
+	 * enter the prompt at full size — cache-neutral even on hybrid
+	 * recurrent models (Qwen3.8 class). The full output is stashed in the
+	 * session and searchable with the recall tool. Default true.
 	 */
 	pruner?: boolean;
 	/** Tool results larger than this many chars get pruned. Default 6000. */
@@ -137,8 +147,6 @@ export interface ContextConfig {
 	prunerHeadChars?: number;
 	/** Chars kept from the end of a pruned result. Default 1500. */
 	prunerTailChars?: number;
-	/** The N most recent tool results are never pruned. Default 6. */
-	prunerProtectRecent?: number;
 	/** Register the `recall` transcript-search tool. Default true. */
 	recall?: boolean;
 }

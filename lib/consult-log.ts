@@ -153,7 +153,7 @@ export interface CompactionRecord extends BaseRecord {
 	tokensBefore: number;
 	messagesSummarized: number;
 	summaryChars: number;
-	outcome: "custom" | "fallback_empty" | "fallback_error" | "fallback_not_smaller";
+	outcome: "arc" | "custom" | "fallback_empty" | "fallback_error" | "fallback_not_smaller";
 	elapsedMs: number;
 	error?: string;
 }

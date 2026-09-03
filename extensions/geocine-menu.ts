@@ -192,24 +192,32 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 		}
 		case "context": {
 			const c = cfg.context ?? {};
-			// checkpoint/recall default ON; pruner defaults OFF (mid-context
-			// edits are expensive on local servers, brutal on recurrent models).
+			const mode = c.mode ?? (c.checkpoint === false ? "off" : "arc");
+			// pruner (ingestion-time, cache-neutral) and recall default ON.
 			const state: Record<string, boolean> = {
-				checkpoint: c.checkpoint !== false,
-				pruner: c.pruner === true,
+				pruner: c.pruner !== false,
 				recall: c.recall !== false,
 			};
 			const rows = [
-				`Checkpoint compaction: ${onOff(state.checkpoint)} — toggle`,
-				`Tool-result pruner: ${onOff(state.pruner)} — toggle (off = prefix-stable)`,
+				`Compaction mode: ${mode.toUpperCase()} — cycle arc → checkpoint → off`,
+				`Ingestion pruner (shell outputs): ${onOff(state.pruner)} — toggle`,
 				`Recall tool: ${onOff(state.recall)} — toggle`,
 			];
 			const picked = await ctx.ui.select(
-				`Context keeper (summarizer: ${c.summarizer ?? "session model"}, early compact: ${c.compactAtTokens ? `${c.compactAtTokens} tokens` : "pi default"}):`,
+				`Context keeper (early compact: ${c.compactAtTokens ? `${c.compactAtTokens} tokens` : "pi default"}${c.idleCompactMinutes ? `, idle: ${c.idleCompactMinutes}m` : ""}):`,
 				rows,
 			);
 			if (!picked) return;
-			const key = picked.startsWith("Checkpoint") ? "checkpoint" : picked.startsWith("Tool-result") ? "pruner" : "recall";
+			if (picked.startsWith("Compaction mode")) {
+				const next = mode === "arc" ? "checkpoint" : mode === "checkpoint" ? "off" : "arc";
+				updateGlobalConfig((g) => {
+					g.context = { ...(g.context ?? {}), mode: next };
+					delete g.context.checkpoint; // retire the legacy boolean
+				});
+				ctx.ui.notify(`context.mode: ${next} (persisted)`, "info");
+				return;
+			}
+			const key = picked.startsWith("Ingestion") ? "pruner" : "recall";
 			const next = !state[key];
 			updateGlobalConfig((g) => {
 				g.context = { ...(g.context ?? {}), [key]: next };
@@ -300,7 +308,7 @@ export default function geocineMenu(pi: ExtensionAPI) {
 					section: "approval",
 				},
 				{
-					label: `Context keeper: checkpoint ${onOff(cfg.context?.checkpoint !== false)}, pruner ${onOff(cfg.context?.pruner === true)}, recall ${onOff(cfg.context?.recall !== false)}`,
+					label: `Context keeper: ${(cfg.context?.mode ?? (cfg.context?.checkpoint === false ? "off" : "arc")).toUpperCase()}, pruner ${onOff(cfg.context?.pruner !== false)}, recall ${onOff(cfg.context?.recall !== false)}`,
 					section: "context",
 				},
 				{ label: `Watchdog: ${onOff(watchdogOn)} — toggle`, section: "watchdog" },

@@ -51,15 +51,15 @@
 	},
 
 	"context": {
-		"$comment": "context-keeper. checkpoint = structured compaction summary (summarizer defaults to the session model). compactAtTokens = compact EARLY while a local provider is active — pi's own threshold (contextWindow - reserveTokens) is minutes of prompt re-ingest too late on a local server. recall = transcript-search tool so compaction is never lossy. pruner = head/tail trim of old oversized tool results; OFF by default because each newly pruned result mutates the prompt mid-context (partial re-ingest on standard KV, near-full on hybrid recurrent models like Qwen3.8).",
-		"checkpoint": true,
+		"$comment": "context-keeper. mode: 'arc' = deterministic compaction digest (no model call, instant, recall recovers exact content), 'checkpoint' = LLM-written structured checkpoint, 'off' = pi default. compactAtTokens = compact EARLY while a local provider is active — pi's own threshold (contextWindow - reserveTokens) is minutes of prompt re-ingest too late on a local server. idleCompactMinutes = also compact after N idle minutes past half the threshold (cost lands while nobody waits). pruner = ingestion-time head/tail trim of oversized bash/powershell outputs (cache-neutral: trimmed ONCE at capture, full output stashed for recall). recall = transcript-search tool so compaction is never lossy.",
+		"mode": "arc",
 		"compactAtTokens": 60000,
+		"idleCompactMinutes": 5,
 		"recall": true,
-		"pruner": false,
+		"pruner": true,
 		"prunerThresholdChars": 6000,
 		"prunerHeadChars": 1500,
-		"prunerTailChars": 1500,
-		"prunerProtectRecent": 6
+		"prunerTailChars": 1500
 	},
 
 	"qwen": {

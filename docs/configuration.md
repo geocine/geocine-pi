@@ -38,6 +38,17 @@ Auth: consultants run as pi child processes on the host and inherit
 with no extra config. The docker jail is the exception — see
 [docker-jail.md](docker-jail.md).
 
+### Invoking a consultation
+
+- The **model** calls the `consult` tool with a question plus the minimal
+  files to stage; its live thinking/answer streams into the tool display.
+- **You** type `/consult [@consultant] [+file[:a-b] …] <question>` — `+`
+  tokens stage files (e.g. `/consult @frontier +docs/outline.md is this
+  order right?`); progress streams in the footer status bar.
+- A staged-jail consultation with **no files** runs as pure Q&A: the
+  consultant gets no workspace and no read tools, is told so explicitly,
+  and is asked to name the paths it would need for a confident answer.
+
 ## Approval gate
 
 `approval.consultTool` — permission gate for **LLM-invoked** `consult` tool
@@ -63,18 +74,23 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
 
 ## Context keeper
 
-- `context.checkpoint` / `recall` — structured checkpoint compaction and
-  the transcript search tool. Default on.
+- `context.mode` — compaction style: `"arc"` (deterministic digest, no
+  model call, default), `"checkpoint"` (LLM-written structured checkpoint),
+  or `"off"` (pi default).
+- `context.recall` — the transcript search tool. Default on.
 - `context.compactAtTokens` — compact early at this many tokens while a
   local provider is active (pi's own threshold, contextWindow − reserve, is
   minutes of prompt re-ingest too late on local hardware). Unset = off.
-- `context.pruner` — old-tool-result trimming. **Opt-in**: each newly
-  pruned result mutates the prompt mid-context, which costs a re-ingest on
-  local servers (near-full on hybrid recurrent models like Qwen3.8).
-- `context.summarizer` — consultant whose model writes the checkpoint
-  (default: the session's own model, which reuses the warm KV cache).
+- `context.idleCompactMinutes` — also compact after N idle minutes once the
+  context is past half the threshold. Unset = off.
+- `context.pruner` — ingestion-time trimming of oversized bash/powershell
+  outputs (cache-neutral; the full output stays searchable via recall).
+  Default on.
+- `context.summarizer` — checkpoint mode only: consultant whose model
+  writes the checkpoint (default: the session's own model, which reuses the
+  warm KV cache).
 - `context.maxTokens`, `prunerThresholdChars`, `prunerHeadChars`,
-  `prunerTailChars`, `prunerProtectRecent` — budgets.
+  `prunerTailChars` — budgets.
 - `qwen.auto` / `qwen.level` — persisted `/qwen` thinking state (written
   automatically by the command; survives restarts and `/reload`).
 

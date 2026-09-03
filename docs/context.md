@@ -2,20 +2,29 @@
 
 Long sessions die one of two deaths: the context fills with stale tool
 output, or compaction summarizes away the one detail you needed an hour
-later. `context-keeper` attacks both with three mechanisms, configured under
-the `context` block of `geocine.json`.
+later. `context-keeper` attacks both, configured under the `context` block
+of `geocine.json`.
 
 ## Design position
 
 Summarization-only compaction is lossy, and the loss compounds: each
 checkpoint summarizes the previous checkpoint's survivors. Recent work
-converges on a different shape — keep summaries cheap and shallow, keep the
-**raw history retrievable**, and let the agent pull details back on demand:
+converges on a different shape — keep the in-context digest cheap and
+shallow, keep the **raw history retrievable**, and let the agent pull
+details back on demand:
 
 - **ACM** ([alphaXiv 2607.23809](https://www.alphaxiv.org/abs/2607.23809))
   gives the agent `manage_context` (offload + summarize) and `query_memory`
   (targeted retrieval from the offloaded raw log). Lossless in effect,
   because nothing is deleted — only moved out of the window.
+- **ARC** ([alphaXiv 2607.25066](https://www.alphaxiv.org/abs/2607.25066)):
+  compaction does not need an LLM at all. Replace old content with
+  deterministic citation stubs and give the agent a `recall` tool; on
+  needle-recovery evals this beat LLM summarization 99.4% vs 88.1% —
+  paraphrase is where the loss lives.
+- **TokenPilot** ([alphaXiv 2606.17016](https://www.alphaxiv.org/abs/2606.17016)):
+  trim noise **at ingestion**, not retroactively — a tail append never
+  invalidates the provider prefix cache, a mid-context edit always does.
 - **Raw-log search rivals structured memory**
   ([alphaXiv 2608.12888](https://www.alphaxiv.org/abs/2608.12888)):
   agent-controlled search over unprocessed transcripts matches or beats
@@ -43,7 +52,8 @@ How the engines decide:
   re-paid at prompt-processing speed whenever the cache misses. At 500
   tok/s, one cache miss on a 150k context is **5 minutes of "Working…"**.
 - **deepseek-harness**: compacts at `thresholdRatio` 0.8 × context window,
-  keeps a 0.16 verbatim tail, and prunes tool results first.
+  keeps a 0.16 verbatim tail, prunes tool results first, and also compacts
+  when the session goes idle (`compactNow()`).
 - **ACM** (paper above): keeps the working set at 20–60k tokens with
   proactive "sawtooth" compaction well before any hard limit.
 
@@ -52,6 +62,11 @@ agent run settles, if the context exceeds the threshold **and a local
 provider is active** (`rescue.localProviders`), the keeper calls compaction
 itself. 60000 is a good default for ~500 tok/s hardware. Cloud models are
 left to pi's own threshold.
+
+`context.idleCompactMinutes` adds the dsh idle trigger: once the context is
+past **half** of `compactAtTokens`, N minutes of idleness also compacts —
+the cost lands while nobody is waiting, so the next prompt starts from a
+small, warm context.
 
 It deliberately waits for the run to settle rather than firing between
 turns: mid-run the next LLM request is already in flight and an extension-
@@ -70,90 +85,110 @@ llama.cpp rolls back to the nearest saved checkpoint — often near position
 telltale). And divergence happens *every turn* when thinking is on, because
 the Qwen chat template strips prior-turn `<think>` blocks from resent
 history. Keeping the context small is the only real defense. Server-side,
-raise `--ctx-checkpoints` (default 32) so rollback points are denser, and
-consider a smaller `-c` so pi's own threshold also fires sooner.
+raise `--ctx-checkpoints` and lower `--checkpoint-min-step` so rollback
+points are denser — see [local-qwen.md](local-qwen.md) for the full
+recommended launch command.
 
-## 1. Tool-result pruner (deterministic, model-free — **opt-in**)
+## 1. Ingestion pruner (deterministic, cache-neutral, default on)
 
-When enabled (`"pruner": true`), tool results **older than the last
-`prunerProtectRecent` (default 6)** whose text exceeds
-`prunerThresholdChars` (default 6000) are trimmed to
+Oversized `bash`/`powershell` outputs are head/tail-trimmed **once, at the
+moment they are captured** (`tool_result` event), before they ever enter
+the prompt. Outputs above `prunerThresholdChars` (default 6000) keep
 `prunerHeadChars` + `prunerTailChars` (default 1500 + 1500) around a marker:
 
 ```
-[geocine-pi: pruned 41230 chars from the middle of this old tool result.
- The full output is in the session transcript — use the recall tool to search it.]
+[geocine-pi: trimmed 41230 chars from the middle of this large output at
+ capture time. The full output is preserved in the session transcript —
+ search it with the recall tool.]
 ```
 
-Ported from deepseek-harness's `compaction-tool-result-pruner`. Properties:
+This is TokenPilot's ingestion gate in pi terms, and it fixes the flaw of
+retroactive pruning (the previous design, ported from deepseek-harness):
+editing an *old* message mutates the prompt mid-context, which costs a
+partial re-ingest on standard KV models and a near-full re-ingest on hybrid
+recurrent models. An ingestion-time trim is just a shorter tail append —
+the prefix cache never notices.
 
-- **Non-destructive** — pi's `context` event mutates a per-request copy;
-  the session log keeps the full output, so `recall` can still search it.
-- **Free** — no model call. It delays compaction by cutting dead weight
-  first, which is the deepseek-harness ordering: prune, then summarize.
-- **Off by default** — each result that newly ages past the protection
-  window mutates the prompt *mid-context*. Cloud providers just re-read a
-  suffix; a local standard-KV server re-ingests from the edit point; a
-  hybrid recurrent model re-ingests nearly everything. Enable it only where
-  prompt processing is cheap.
+The full untrimmed output is stashed as a hidden session entry
+(never sent to the LLM), so `recall` can still search every byte of it.
+Only shell output is pruned: `read`/`grep` results are something the model
+usually needs verbatim *right now*, and pi already caps those tools itself.
 
 ## 2. `recall` tool (transcript history lookup)
 
 An LLM-callable tool that regex-searches the **full raw session
-transcript** — including spans hidden by compaction and text removed by the
-pruner — and returns snippets, newest first. This is ACM's `query_memory`
-and the Codex-style transcript lookup in pi terms.
+transcript** — including spans hidden by compaction and the full stashes of
+pruned shell outputs — and returns snippets, newest first. This is ACM's
+`query_memory`, ARC's `_recall`, and the Codex-style transcript lookup in
+pi terms.
 
-The checkpoint summary ends with a footer telling the model the tool
+Every compaction summary ends with a footer telling the model the tool
 exists, so after a compaction the model reaches for `recall` instead of
 re-reading files or re-running commands to reconstruct what it forgot.
 
-## 3. Checkpoint compaction (prefix-cache-aligned)
+## 3. Compaction modes (`context.mode`)
 
-Replaces pi's default compaction summary via `session_before_compact`.
-Differences from stock pi:
+### `"arc"` (default) — deterministic digest
 
-- **Structured checkpoint** (ported from deepseek-harness
-  `compaction-basic`): fixed sections — Primary Request and Intent, Key
-  Technical Concepts, Files and Code, Errors and Fixes, Pending Jobs,
-  Current Work, Next Step, Critical Context — with rules to preserve exact
-  paths/commands/error strings and to *merge* (not copy) a prior checkpoint.
-- **Prefix-cache alignment**: the summarization call replays the session's
-  own system prompt and the actual conversation messages, then appends the
-  instruction as the final user message. The call is a genuine prefix of
-  the last request, so the provider's KV cache is reused — on a single-slot
-  llama.cpp server the summarization is nearly free instead of re-ingesting
-  the whole conversation. (Stock pi deliberately routes compaction as a
-  cache-cold one-off; that's the right call for cloud pricing, the wrong
-  one for a local server.)
-- **Shrink guarantee**: if the summary is not clearly smaller than what it
-  replaces, the extension falls back to pi's default compaction rather than
-  landing a bad trade.
-- **Configurable summarizer**: `context.summarizer` names a consultant
-  whose model writes the checkpoint. Unset, the session's own model is used
-  — for the local-first setup this is usually right (free + warm cache).
+ARC's core result is that the *summarization model* is the weak link:
+paraphrase drops needles that deterministic stubs keep findable. So the
+default compaction writes **no-LLM digest** of the compacted span:
+
+- one terse line per step — user asks, assistant actions with tool calls,
+  tool results as head/tail stubs with their size;
+- thinking blocks dropped entirely;
+- a carried-forward section from the previous digest (capped, oldest first
+  to go);
+- a budget (~10k chars): oldest lines fall off first, and the recall footer
+  covers everything omitted.
+
+Properties: **instant** (no model call — compaction latency goes from
+minutes on a local server to zero), **no paraphrase loss** (nothing is
+reworded, only elided — and everything elided is recoverable verbatim via
+`recall`), and **deterministic** (same span → same digest).
+
+### `"checkpoint"` — LLM-written structured checkpoint
+
+The previous default, kept for when a narrative summary is worth the
+latency (e.g. before handing a session to a different model). Ported from
+deepseek-harness `compaction-basic`:
+
+- fixed sections (Primary Request and Intent, Key Technical Concepts,
+  Files and Code, Errors and Fixes, Pending Jobs, Current Work, Next Step,
+  Critical Context) with rules to preserve exact paths/commands/error
+  strings and to *merge* (not copy) a prior checkpoint;
+- **prefix-cache alignment**: the summarization call replays the session's
+  own system prompt and messages, then appends the instruction as the final
+  user message — a genuine prefix of the last request, so a single-slot
+  llama.cpp server reuses its KV cache instead of re-ingesting everything;
+- **shrink guarantee**: a summary that is not clearly smaller than what it
+  replaces falls back to pi's default compaction;
+- `context.summarizer` names a consultant whose model writes the
+  checkpoint (default: the session's own model — free + warm cache).
+
+### `"off"` — pi's default compaction.
 
 Every compaction lands a `compaction` record in the consult-log
-(`reason`, summarizer, `tokensBefore`, summary size, outcome, latency).
-`recall` calls made shortly after a compaction are a utilization signal:
-they mark exactly what the checkpoint failed to carry forward — future
-training data for a better local summarizer.
+(`reason`, summarizer or `deterministic`, `tokensBefore`, summary size,
+outcome, latency). `recall` calls made shortly after a compaction are a
+utilization signal: they mark exactly what the digest failed to carry
+forward — future training data for a better local summarizer.
 
 ## Configuration
 
 ```jsonc
 "context": {
-  "checkpoint": true,            // structured checkpoint compaction (default on)
+  "mode": "arc",                 // arc (deterministic, default) | checkpoint (LLM) | off
   "compactAtTokens": 60000,      // early compaction while a local provider is active (0/unset = pi default)
-  "summarizer": "local-big",     // optional: consultant name; default = session model
-  "maxTokens": 4096,             // checkpoint length cap
+  "idleCompactMinutes": 5,       // idle compaction past half the threshold (0/unset = off)
   "recall": true,                // transcript search tool (default on)
-  "pruner": false,               // old-tool-result trimming — OPT-IN (mid-context edits cost re-ingest locally)
+  "pruner": true,                // ingestion-time trim of big shell outputs (default on)
   "prunerThresholdChars": 6000,
   "prunerHeadChars": 1500,
   "prunerTailChars": 1500,
-  "prunerProtectRecent": 6
+  "summarizer": "local-big",     // checkpoint mode only: consultant name; default = session model
+  "maxTokens": 4096              // checkpoint length cap
 }
 ```
 
-Toggle checkpoint/pruner/recall from `/geocine context`.
+Cycle the mode and toggle pruner/recall from `/geocine context`.
