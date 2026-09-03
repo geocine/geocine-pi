@@ -1,0 +1,63 @@
+{
+	"$comment": "Copy to ~/.pi/agent/geocine.json and edit. Project override: .pi/geocine.json (consultants merge by name).",
+
+	"defaultConsultant": "frontier",
+
+	"consultants": {
+		"frontier": {
+			"$comment": "OAuth providers (pi /login, stored in ~/.pi/agent/auth.json) need no envKeys: consultant children are pi processes on the host and inherit auth. envKeys are only for API-key providers inside the docker jail.",
+			"provider": "xai",
+			"model": "grok-4.6",
+			"thinking": "high",
+			"role": "hard debugging, root-cause analysis, and planning complex changes",
+			"jail": "staged",
+			"prescreen": true
+		},
+		"local-big": {
+			"provider": "llama.cpp",
+			"model": "unsloth/Qwen3.8-27B-GGUF:Q4_K_M",
+			"role": "second opinion that costs nothing; quick sanity checks and code review",
+			"jail": "none",
+			"prescreen": false
+		},
+		"abliterated": {
+			"provider": "abliteration-ai",
+			"model": "abliterated-model",
+			"role": "content strict models falsely refuse: reverse engineering, security analysis, decompiled binaries",
+			"jail": "none",
+			"prescreen": false,
+			"notes": "Fallback consultant for content that strict cloud models falsely refuse (reverse engineering, security analysis, decompiled binaries)."
+		}
+	},
+
+	"approval": {
+		"$comment": "Gate for LLM-invoked consult tool calls (user-typed /consult never asks). 'ask' prompts yes/no/always-allow/auto-all; 'auto' never prompts. Per-consultant: \"autoApprove\": true.",
+		"consultTool": "ask"
+	},
+
+	"prescreen": {
+		"consultant": "local-big",
+		"maxBytes": 24576
+	},
+
+	"watchdog": {
+		"enabled": true,
+		"sendHints": true,
+		"hintCooldownTurns": 4,
+		"loopThreshold": 3,
+		"failStreakThreshold": 3,
+		"$comment_baseUrl": "Optional tier-1 LLM watchdog. Use a SECOND small model instance (e.g. Qwen 4B on another port), never the main single-slot server — a side request there evicts the main KV cache.",
+		"$comment_example": "\"baseUrl\": \"http://127.0.0.1:8081/v1\", \"model\": \"qwen3-4b\""
+	},
+
+	"docker": {
+		"image": "geocine-consult"
+	},
+
+	"rescue": {
+		"enabled": true,
+		"localProviders": ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"],
+		"$comment": "Captures manual local->frontier /model switches as rescue episodes in the consult-log. /distill drafts a lesson from the last episode using distillConsultant (default: prescreen.consultant).",
+		"distillConsultant": "local-big"
+	}
+}

@@ -1,0 +1,15 @@
+{
+	"name": "geocine-pi",
+	"version": "0.1.0",
+	"description": "Local-first pi plugin set: cheap local worker, evidence-triggered consultation of stronger models, jailed context-capped consults, and decision logging for future fine-tuning.",
+	"type": "module",
+	"keywords": ["pi-package"],
+	"pi": {
+		"extensions": ["./extensions"]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"typebox": "*"
+	}
+}
