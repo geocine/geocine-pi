@@ -77,7 +77,14 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
 - `context.mode` — compaction style: `"arc"` (deterministic digest, no
   model call, default), `"checkpoint"` (LLM-written structured checkpoint),
   or `"off"` (pi default).
-- `context.recall` — the transcript search tool. Default on.
+- `context.recall` — the transcript search tool (exact regex primary, BM25
+  fallback on zero matches, full entry read-back via `entry`/`offsetChars`).
+  Default on.
+- `context.notes` — the `note` tool; notes are pinned verbatim into every
+  compaction digest. Default on.
+- `context.reminderTokens` — pre-compaction reminder lead: within this many
+  tokens of `compactAtTokens`, the model is told once to pin load-bearing
+  facts before the cut. Default 8000; 0 disables.
 - `context.compactAtTokens` — compact early at this many tokens while a
   local provider is active (pi's own threshold, contextWindow − reserve, is
   minutes of prompt re-ingest too late on local hardware). Unset = off.

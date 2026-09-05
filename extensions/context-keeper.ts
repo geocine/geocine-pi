@@ -21,15 +21,37 @@
 //     is ACM's query_memory / ARC's _recall: compaction stops being lossy
 //     because the agent can always search what was cut. (ARC: recall-backed
 //     deterministic compaction beat LLM summarization 99.4% vs 88.1% on
-//     needle recovery.)
+//     needle recovery.) Exact regex match is primary (Codex's history
+//     search is a literal substring; exact match is right for error
+//     strings/paths); a BM25 fallback ranks by keyword relevance when the
+//     exact query misses — paraphrase tolerance for a local model that is
+//     weak at query reformulation. `entry` reads one entry back in FULL
+//     (Codex history.read_item): a snippet tells you where, a read gives
+//     you the bytes, and re-derivation is the cost compression papers warn
+//     about (2608.16370).
 //
-//  3. COMPACTION MODES
-//     - "arc" (default): deterministic digest — terse action lines, tool
-//       results as head/tail stubs, thinking dropped, no model call. Zero
-//       latency and no paraphrase loss; recall recovers exact content.
+//  3. NOTE TOOL (model-written durable state) — Codex's notes insight: the
+//     machine cannot know which fact is load-bearing; let the MODEL pin
+//     short facts that must survive compaction VERBATIM. Notes are stored
+//     as session entries and re-pinned word-for-word into every compaction
+//     digest (budget-capped, newest win). A pre-compaction reminder tells
+//     the model the cut is coming (Codex's token-budget reminder) so it can
+//     pin state before older history is folded away.
+//
+//  4. COMPACTION MODES
+//     - "arc" (default): deterministic digest — pinned notes, terse action
+//       lines, tool results as head/tail stubs, thinking dropped, no model
+//       call. Zero latency and no paraphrase loss; recall recovers exact
+//       content.
 //     - "checkpoint": LLM-written structured checkpoint (dsh
-//       compaction-basic), prefix-cache-aligned with a shrink guarantee.
-//     - "off": pi default compaction.
+//       compaction-basic), prefix-cache-aligned with a shrink guarantee;
+//       pinned notes are appended verbatim after the checkpoint.
+//     - "off": pi default compaction (notes are not pinned).
+//
+// Division of responsibility: the MACHINE decides what leaves the window
+// (deterministic digest), the MODEL decides what survives verbatim (notes),
+// everything else is recoverable on demand (recall: exact -> BM25 -> full
+// read-back), and the model sees the budget coming (reminder).
 //
 // Config: `context` block in geocine.json — see geocine.example.json.
 
@@ -40,13 +62,18 @@ import { type ContextConfig, DEFAULT_LOCAL_PROVIDERS, loadConfig, logDir } from 
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
 
 const PRUNED_STASH_TYPE = "geocine-pruned";
+const NOTE_TYPE = "geocine-note";
 const PRUNE_MARKER_PREFIX = "\n[geocine-pi: trimmed ";
 const ARC_DIGEST_BUDGET = 10_000; // chars; ~2.5k tokens — always far smaller than the span
+const NOTES_BUDGET = 4000; // chars of pinned notes per digest; newest win
+const NOTE_MAX_CHARS = 1000; // per note; notes are facts, not essays
+const READ_CHUNK_CHARS = 10_000; // recall entry read-back page size
 const DEFAULTS = {
 	maxTokens: 4096,
 	prunerThresholdChars: 6000,
 	prunerHeadChars: 1500,
 	prunerTailChars: 1500,
+	reminderTokens: 8000, // pre-compaction reminder lead
 };
 
 type ContextMode = "arc" | "checkpoint" | "off";
@@ -201,6 +228,109 @@ function searchTranscript(
 	return { total, snippets };
 }
 
+// BM25 fallback: when the exact query misses, rank entries by keyword
+// relevance instead of returning nothing. Exact match stays primary (it is
+// deterministic and right for error strings/paths — Codex's history search
+// is literal-substring only); BM25 covers paraphrased queries ("what did we
+// decide about X") where no literal token survives.
+function tokenize(text: string): string[] {
+	return text
+		.toLowerCase()
+		.split(/[^a-z0-9_./-]+/)
+		.filter((t) => t.length >= 2 && t.length <= 60);
+}
+
+function bm25Search(entries: EntryLike[], query: string, maxResults: number): string[] {
+	const qTerms = [...new Set(tokenize(query))];
+	if (qTerms.length === 0) return [];
+	interface Doc {
+		i: number;
+		label: string;
+		ts: string;
+		text: string;
+		tf: Map<string, number>;
+		len: number;
+	}
+	const docs: Doc[] = [];
+	for (let i = 0; i < entries.length; i++) {
+		const label = entryLabel(entries[i]);
+		if (!label) continue;
+		const text = entryText(entries[i]);
+		if (!text) continue;
+		const terms = tokenize(text);
+		const tf = new Map<string, number>();
+		for (const t of terms) tf.set(t, (tf.get(t) ?? 0) + 1);
+		docs.push({ i, label, ts: entries[i].timestamp ? ` ${String(entries[i].timestamp)}` : "", text, tf, len: terms.length });
+	}
+	if (docs.length === 0) return [];
+	const avgLen = docs.reduce((s, d) => s + d.len, 0) / docs.length || 1;
+	const idf = new Map<string, number>();
+	for (const term of qTerms) {
+		let df = 0;
+		for (const d of docs) if (d.tf.has(term)) df++;
+		idf.set(term, Math.log(1 + (docs.length - df + 0.5) / (df + 0.5)));
+	}
+	const k1 = 1.2;
+	const b = 0.75;
+	const scored = docs
+		.map((d) => {
+			let score = 0;
+			for (const term of qTerms) {
+				const tf = d.tf.get(term) ?? 0;
+				if (tf === 0) continue;
+				score += (idf.get(term) ?? 0) * ((tf * (k1 + 1)) / (tf + k1 * (1 - b + (b * d.len) / avgLen)));
+			}
+			return { d, score };
+		})
+		.filter((s) => s.score > 0)
+		.sort((a, b2) => b2.score - a.score)
+		.slice(0, maxResults);
+
+	return scored.map(({ d }) => {
+		// Snippet around the rarest matching query term.
+		const present = qTerms.filter((t) => d.tf.has(t)).sort((a, b2) => (idf.get(b2) ?? 0) - (idf.get(a) ?? 0));
+		const at = present.length > 0 ? Math.max(0, d.text.toLowerCase().indexOf(present[0])) : 0;
+		const from = Math.max(0, at - 250);
+		const to = Math.min(d.text.length, at + 350);
+		const snippet = `${from > 0 ? "..." : ""}${d.text.slice(from, to)}${to < d.text.length ? "..." : ""}`;
+		return `--- [#${d.i} ${d.label}${d.ts}] ---\n${snippet}`;
+	});
+}
+
+// ---------- pinned notes ----------
+
+/** All note texts in session order (oldest first). */
+function collectNotes(entries: EntryLike[]): string[] {
+	const notes: string[] = [];
+	for (const entry of entries) {
+		if (entry.type === "custom" && entry.customType === NOTE_TYPE && typeof entry.data?.text === "string") {
+			notes.push(entry.data.text);
+		}
+	}
+	return notes;
+}
+
+/** Render notes verbatim under a budget; newest win, oldest drop first. */
+function renderPinnedNotes(notes: string[]): string {
+	if (notes.length === 0) return "";
+	const kept: string[] = [];
+	let used = 0;
+	let omitted = 0;
+	for (let i = notes.length - 1; i >= 0; i--) {
+		const line = `- ${notes[i].replace(/\s+/g, " ").trim()}`;
+		if (used + line.length + 1 > NOTES_BUDGET) {
+			omitted = i + 1;
+			break;
+		}
+		kept.unshift(line);
+		used += line.length + 1;
+	}
+	const parts = ["--- Pinned notes (model-written; kept verbatim across compactions) ---"];
+	if (omitted > 0) parts.push(`... ${omitted} older notes omitted (searchable via recall)`);
+	parts.push(kept.join("\n"));
+	return parts.join("\n");
+}
+
 // ---------- 3a. ARC-style deterministic digest ----------
 
 /** One terse line per message; thinking dropped, tool results stubbed. */
@@ -237,23 +367,35 @@ const RECALL_FOOTER =
 	"\n\n(Older context was compacted away. The full raw transcript is still searchable with the recall tool — use it before re-reading files or re-running commands to recover details like exact error text, earlier tool output, or prior decisions.)";
 
 /** Deterministic compaction summary: no model call, no paraphrase loss.
- *  Budgeted; oldest lines drop first and the recall tool covers the rest. */
-function arcDigest(all: Array<Record<string, unknown>>, previousSummary: string | undefined): string {
+ *  Pinned notes survive verbatim; action lines are budgeted (oldest drop
+ *  first) and the recall tool covers everything omitted. */
+function arcDigest(
+	all: Array<Record<string, unknown>>,
+	previousSummary: string | undefined,
+	notes: string[],
+): string {
 	const lines: string[] = [];
 	for (const m of all) {
 		const line = messageLine(m);
 		if (line) lines.push(line);
 	}
+	const pinned = renderPinnedNotes(notes);
 	let prev = "";
 	if (previousSummary) {
-		const cleaned = previousSummary.replace(RECALL_FOOTER, "").trim();
+		// Strip the footer and the previous pinned-notes section: notes are
+		// re-collected from the session every compaction, so carrying the old
+		// section forward would duplicate them.
+		const cleaned = previousSummary
+			.replace(RECALL_FOOTER, "")
+			.replace(/--- Pinned notes[\s\S]*?(?=\n--- |$)/, "")
+			.trim();
 		const cap = Math.floor(ARC_DIGEST_BUDGET * 0.4);
 		prev =
 			cleaned.length <= cap
 				? cleaned
 				: `${cleaned.slice(0, cap)}\n... (older digest truncated — use the recall tool)`;
 	}
-	const remaining = Math.max(1000, ARC_DIGEST_BUDGET - prev.length);
+	const remaining = Math.max(1000, ARC_DIGEST_BUDGET - prev.length - pinned.length);
 	const kept: string[] = [];
 	let used = 0;
 	let omitted = 0;
@@ -269,6 +411,7 @@ function arcDigest(all: Array<Record<string, unknown>>, previousSummary: string 
 	const parts: string[] = [
 		"Deterministic digest of the compacted history (exact contents of every step below are recoverable with the recall tool):",
 	];
+	if (pinned) parts.push(`\n${pinned}`);
 	if (prev) parts.push(`\n--- Carried forward from an earlier compaction ---\n${prev}`);
 	parts.push("\n--- Action log ---");
 	if (omitted > 0) parts.push(`... ${omitted} earlier steps omitted (searchable via recall)`);
@@ -310,6 +453,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 	// this natively: it is global, and a value tuned for a 262k local
 	// window breaks smaller cloud models.
 	let compactPending = false;
+	let reminderSent = false;
 	let idleTimer: ReturnType<typeof setTimeout> | undefined;
 	const clearIdleTimer = () => {
 		if (idleTimer !== undefined) {
@@ -319,9 +463,82 @@ export default function contextKeeper(pi: ExtensionAPI) {
 	};
 	pi.on("session_compact", () => {
 		compactPending = false;
+		reminderSent = false; // re-arm for the next compaction cycle
 	});
 	pi.on("session_compact_failed", () => {
 		compactPending = false;
+		reminderSent = false;
+	});
+
+	// Pre-compaction reminder (Codex's token-budget reminder in pi terms):
+	// once per compaction cycle, when the context is within reminderTokens of
+	// the early threshold, tell the model the cut is coming so it can pin
+	// load-bearing facts with `note` BEFORE older history folds into the
+	// digest. Fires on turn_end so long tool loops get it mid-run; injecting
+	// a message is a tail append, so the provider prefix cache is untouched.
+	pi.on("turn_end", async (_event, ctx) => {
+		const full = loadConfig(ctx.cwd);
+		const cfg = full.context ?? {};
+		const at = cfg.compactAtTokens;
+		if (!at || at <= 0 || reminderSent || cfg.notes === false) return;
+		const lead = cfg.reminderTokens ?? DEFAULTS.reminderTokens;
+		if (lead <= 0) return;
+		const provider = (ctx.model as { provider?: string } | undefined)?.provider;
+		const locals = full.rescue?.localProviders ?? DEFAULT_LOCAL_PROVIDERS;
+		if (!provider || !locals.includes(provider)) return;
+		const usage = ctx.getContextUsage();
+		if (usage?.tokens == null || usage.tokens < at - lead) return;
+		reminderSent = true;
+		const remaining = Math.max(0, at - usage.tokens);
+		pi.sendMessage(
+			{
+				customType: "context-keeper-reminder",
+				content:
+					`[context-keeper] This context window is approaching compaction (~${remaining} tokens before older history is folded into a digest). ` +
+					"If any decisions, constraints, exact values, paths, or in-progress state must survive VERBATIM, record each one now with the note tool (one short note per fact). " +
+					"Recent turns are kept as-is; everything older stays searchable with recall.",
+				display: false,
+			},
+			{ deliverAs: "steer" },
+		);
+	});
+
+	// -- note tool: model-written durable state, pinned into every digest --
+	pi.registerTool({
+		name: "note",
+		label: "Note",
+		description:
+			"Record ONE short durable fact that must survive context compaction VERBATIM: a decision and its reason, a user constraint, an exact value/path/command, or a gotcha discovered the hard way. Notes are pinned word-for-word into every future compaction digest (newest win under a budget), so keep each note to 1-3 sentences. Do NOT note things that are easy to rediscover (file contents, command output) — those stay searchable with the recall tool.",
+		promptSnippet: "Pin one short fact so it survives context compaction verbatim",
+		promptGuidelines: [
+			"Write a note the moment a decision, constraint, or hard-won discovery is made — do not wait for the pre-compaction reminder.",
+		],
+		parameters: Type.Object({
+			text: Type.String({ description: "The fact to pin, 1-3 sentences. Include exact values/paths, not references to the conversation." }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const cfg = ctxCfg(ctx.cwd);
+			if (cfg.notes === false) {
+				return { content: [{ type: "text", text: "notes are disabled in geocine.json (context.notes)." }], details: {} };
+			}
+			let text = params.text.trim();
+			if (!text) {
+				return { content: [{ type: "text", text: "Empty note ignored." }], details: {} };
+			}
+			if (text.length > NOTE_MAX_CHARS) text = `${text.slice(0, NOTE_MAX_CHARS)}...`;
+			pi.appendEntry(NOTE_TYPE, { text });
+			const all = collectNotes(ctx.sessionManager.getEntries() as EntryLike[]);
+			const used = all.reduce((s, n) => s + n.length + 3, 0);
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Noted — will be pinned verbatim into future compaction digests. ${all.length} note(s), ~${used}/${NOTES_BUDGET} chars pinned (oldest drop first past the budget).`,
+					},
+				],
+				details: { count: all.length },
+			};
+		},
 	});
 	pi.on("agent_start", async () => {
 		clearIdleTimer();
@@ -397,16 +614,23 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		name: "recall",
 		label: "Recall",
 		description:
-			"Search this session's FULL raw transcript — including history that was compacted away or trimmed from large tool outputs. Use it to recover exact error messages, earlier command output, file contents you already read, or decisions made earlier, instead of re-running commands or re-reading files. Regex or plain text; newest matches first.",
-		promptSnippet: "Search the full session transcript (survives compaction) for forgotten details",
+			"Search this session's FULL raw transcript — including history that was compacted away or trimmed from large tool outputs. Use it to recover exact error messages, earlier command output, file contents you already read, or decisions made earlier, instead of re-running commands or re-reading files. Regex or plain text; newest matches first; if the exact query misses, the closest entries by keyword relevance are returned instead. Results are labeled [#N ...] — pass `entry: N` to read that entry IN FULL (paged with offsetChars) when a snippet is not enough, e.g. to retrieve the trimmed middle of a large output.",
+		promptSnippet: "Search the full session transcript (survives compaction); read any [#N] entry back in full",
 		promptGuidelines: [
 			"After a context compaction, use recall to recover specifics the digest dropped (exact errors, paths, earlier outputs) before redoing work.",
+			"When a recall snippet is not enough, read the whole entry with recall's `entry` parameter instead of re-running the command.",
 		],
 		parameters: Type.Object({
 			query: Type.String({
-				description: "Regex (case-insensitive) or literal text to find, e.g. 'ENOENT|permission denied' or a function name.",
+				description: "Regex (case-insensitive) or literal text to find, e.g. 'ENOENT|permission denied' or a function name. Ignored when `entry` is set.",
 			}),
 			maxResults: Type.Optional(Type.Number({ description: "Max snippets to return. Default 5." })),
+			entry: Type.Optional(
+				Type.Number({ description: "Read entry [#N] from earlier results in full instead of searching." }),
+			),
+			offsetChars: Type.Optional(
+				Type.Number({ description: "With `entry`: zero-based char offset to continue a long read. Default 0." }),
+			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const cfg = ctxCfg(ctx.cwd);
@@ -414,12 +638,50 @@ export default function contextKeeper(pi: ExtensionAPI) {
 				return { content: [{ type: "text", text: "recall is disabled in geocine.json (context.recall)." }], details: {} };
 			}
 			const entries = ctx.sessionManager.getEntries() as EntryLike[];
+
+			// Full entry read-back (Codex history.read_item): snippets locate,
+			// reads retrieve — cheaper than re-running the command.
+			if (params.entry !== undefined) {
+				const idx = Math.trunc(params.entry);
+				const entry = entries[idx];
+				const label = entry ? entryLabel(entry) : undefined;
+				if (!entry || !label) {
+					return {
+						content: [{ type: "text", text: `No readable transcript entry #${idx}. Use a recall search first; results are labeled [#N ...].` }],
+						details: {},
+					};
+				}
+				const text = entryText(entry);
+				const off = Math.max(0, Math.trunc(params.offsetChars ?? 0));
+				const slice = text.slice(off, off + READ_CHUNK_CHARS);
+				const more = off + slice.length < text.length;
+				return {
+					content: [
+						{
+							type: "text",
+							text:
+								`[#${idx} ${label}] chars ${off}-${off + slice.length} of ${text.length}:\n${slice}` +
+								(more ? `\n\n(more — call recall again with entry: ${idx}, offsetChars: ${off + slice.length})` : ""),
+						},
+					],
+					details: { entry: idx, totalChars: text.length },
+				};
+			}
+
 			const max = Math.min(Math.max(1, params.maxResults ?? 5), 20);
 			const { total, snippets } = searchTranscript(entries, params.query, max);
-			const text =
-				total === 0
-					? `No transcript matches for: ${params.query}`
-					: `${total} match(es) in the raw transcript (showing ${snippets.length}, newest first):\n\n${snippets.join("\n\n")}`;
+			let text: string;
+			if (total > 0) {
+				text = `${total} match(es) in the raw transcript (showing ${snippets.length}, newest first):\n\n${snippets.join("\n\n")}`;
+			} else {
+				// Exact query missed: fall back to BM25 keyword relevance so a
+				// paraphrased query still lands near the right entries.
+				const ranked = bm25Search(entries, params.query, max);
+				text =
+					ranked.length === 0
+						? `No transcript matches for: ${params.query}`
+						: `No exact matches for "${params.query}". Closest ${ranked.length} entries by keyword relevance (not exact hits — verify before relying on them):\n\n${ranked.join("\n\n")}`;
+			}
 			return { content: [{ type: "text", text: text.slice(0, 12_000) }], details: { total } };
 		},
 	});
@@ -434,6 +696,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		const { messagesToSummarize, turnPrefixMessages, tokensBefore, firstKeptEntryId, previousSummary } = preparation;
 		const all = [...messagesToSummarize, ...turnPrefixMessages];
 		if (all.length === 0) return;
+		const notes = cfg.notes === false ? [] : collectNotes(ctx.sessionManager.getEntries() as EntryLike[]);
 
 		const log = (
 			outcome: "arc" | "custom" | "fallback_empty" | "fallback_error" | "fallback_not_smaller",
@@ -452,6 +715,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 				tokensBefore,
 				messagesSummarized: all.length,
 				summaryChars,
+				notesPinned: notes.length,
 				outcome,
 				elapsedMs: Date.now() - started,
 				...(error ? { error } : {}),
@@ -460,7 +724,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 
 		// --- arc mode: deterministic, no model call, effectively instant ---
 		if (mode === "arc") {
-			const summary = arcDigest(all as unknown as Array<Record<string, unknown>>, previousSummary);
+			const summary = arcDigest(all as unknown as Array<Record<string, unknown>>, previousSummary, notes);
 			log("arc", "deterministic", summary.length);
 			return {
 				compaction: {
@@ -549,9 +813,12 @@ export default function contextKeeper(pi: ExtensionAPI) {
 			}
 
 			log("custom", summarizerName, summary.length);
+			// Pinned notes ride along verbatim: the LLM checkpoint may
+			// paraphrase, but notes are exactly what the model asked to keep.
+			const pinned = renderPinnedNotes(notes);
 			return {
 				compaction: {
-					summary: summary + RECALL_FOOTER,
+					summary: summary + (pinned ? `\n\n${pinned}` : "") + RECALL_FOOTER,
 					firstKeptEntryId,
 					tokensBefore,
 					usage: response.usage,

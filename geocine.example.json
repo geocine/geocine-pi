@@ -51,11 +51,13 @@
 	},
 
 	"context": {
-		"$comment": "context-keeper. mode: 'arc' = deterministic compaction digest (no model call, instant, recall recovers exact content), 'checkpoint' = LLM-written structured checkpoint, 'off' = pi default. compactAtTokens = compact EARLY while a local provider is active — pi's own threshold (contextWindow - reserveTokens) is minutes of prompt re-ingest too late on a local server. idleCompactMinutes = also compact after N idle minutes past half the threshold (cost lands while nobody waits). pruner = ingestion-time head/tail trim of oversized bash/powershell outputs (cache-neutral: trimmed ONCE at capture, full output stashed for recall). recall = transcript-search tool so compaction is never lossy.",
+		"$comment": "context-keeper. mode: 'arc' = deterministic compaction digest (no model call, instant, recall recovers exact content), 'checkpoint' = LLM-written structured checkpoint, 'off' = pi default. compactAtTokens = compact EARLY while a local provider is active — pi's own threshold (contextWindow - reserveTokens) is minutes of prompt re-ingest too late on a local server. idleCompactMinutes = also compact after N idle minutes past half the threshold (cost lands while nobody waits). pruner = ingestion-time head/tail trim of oversized bash/powershell outputs (cache-neutral: trimmed ONCE at capture, full output stashed for recall). recall = transcript search (exact regex primary, BM25 fallback) + full entry read-back. notes = model-written facts pinned VERBATIM into every digest; reminderTokens = pre-compaction reminder lead so the model pins state before the cut (0 = off).",
 		"mode": "arc",
 		"compactAtTokens": 60000,
 		"idleCompactMinutes": 5,
 		"recall": true,
+		"notes": true,
+		"reminderTokens": 8000,
 		"pruner": true,
 		"prunerThresholdChars": 6000,
 		"prunerHeadChars": 1500,

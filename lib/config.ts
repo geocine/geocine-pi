@@ -147,6 +147,17 @@ export interface ContextConfig {
 	prunerHeadChars?: number;
 	/** Chars kept from the end of a pruned result. Default 1500. */
 	prunerTailChars?: number;
+	/**
+	 * The `note` tool + verbatim pinning of notes into compaction digests
+	 * (Codex-style model-written durable state). Default true.
+	 */
+	notes?: boolean;
+	/**
+	 * Inject a one-shot pre-compaction reminder when the context is within
+	 * this many tokens of compactAtTokens, telling the model to pin
+	 * load-bearing facts with `note` before the cut. Default 8000; 0 = off.
+	 */
+	reminderTokens?: number;
 	/** Register the `recall` transcript-search tool. Default true. */
 	recall?: boolean;
 }

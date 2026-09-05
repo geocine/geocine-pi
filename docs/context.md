@@ -36,11 +36,23 @@ details back on demand:
   state that compression dropped (re-reading files, re-running commands).
   Retrieval from the transcript is cheaper than re-derivation.
 
-This is also the direction Codex CLI is reportedly heading (hard context
-cutovers + notes + transcript history lookup) — and pi is well positioned
-for it, since pi's session log already keeps every entry; compaction only
-hides them from the projection. `context-keeper` closes the loop by adding
-the retrieval half.
+This is also the direction Codex CLI has taken in production: its
+experimental `context_management` mode does **no summarization at all** —
+the model maintains private `notes` (incremental checkpoints), gets a
+token-budget reminder before the window is cut over, and recovers through a
+read-only `history` tool (search + read-back by item id) in the fresh
+window. pi is well positioned for the same shape, since pi's session log
+already keeps every entry; compaction only hides them from the projection.
+
+`context-keeper` combines all of this into one **division of
+responsibility**:
+
+| Who decides | What | Mechanism | Grounding |
+| --- | --- | --- | --- |
+| Machine | what leaves the window | deterministic ARC digest, ingestion pruning | ARC 2607.25066, TokenPilot 2606.17016 |
+| Model | what survives verbatim | `note` tool, pinned into every digest | Codex notes; the machine can't know which fact is load-bearing |
+| Model, on demand | what comes back | `recall`: exact search → BM25 fallback → full entry read-back | 2608.12888 (raw-log search), 2608.16370 (re-derivation cost) |
+| Machine | when the cut happens | early + idle compaction, pre-cut reminder to the model | ACM sawtooth, dsh compactNow, Codex budget reminder |
 
 ## 0. When compaction triggers (and why pi's default is too late locally)
 
@@ -116,17 +128,61 @@ usually needs verbatim *right now*, and pi already caps those tools itself.
 
 ## 2. `recall` tool (transcript history lookup)
 
-An LLM-callable tool that regex-searches the **full raw session
-transcript** — including spans hidden by compaction and the full stashes of
-pruned shell outputs — and returns snippets, newest first. This is ACM's
-`query_memory`, ARC's `_recall`, and the Codex-style transcript lookup in
-pi terms.
+An LLM-callable tool over the **full raw session transcript** — including
+spans hidden by compaction and the full stashes of pruned shell outputs.
+This is ACM's `query_memory`, ARC's `_recall`, and Codex's `history`
+namespace in pi terms. Three layers:
+
+- **Exact search (primary)**: case-insensitive regex/literal, snippets
+  newest first. Exact match is the right primary — it is deterministic,
+  index-free, and recall's dominant use is distinctive tokens (error
+  strings, function names, paths). Codex's `history.search_contents` is
+  literal-substring only; ARC's recall is exact citation lookup.
+- **BM25 fallback**: when the exact query returns nothing, the closest
+  entries by keyword relevance are returned instead, clearly labeled as
+  ranked guesses. Exact match fails on paraphrase ("what did we decide
+  about packet ordering") and a small local model is weak at query
+  reformulation; BM25 (hand-rolled, in-memory, milliseconds on a
+  few-thousand-entry corpus) absorbs that without giving up determinism
+  where it counts.
+- **Entry read-back**: every result is labeled `[#N role ...]`; passing
+  `entry: N` reads that entry **in full**, paged by `offsetChars` (Codex's
+  `history.read_item`). A snippet tells you *where*, a read gives you the
+  *bytes*. This also closes the pruner's hole: the trimmed middle of a
+  large output is otherwise unreachable, and re-running the command is
+  exactly the re-derivation cost 2608.16370 measures (when it is possible
+  at all).
 
 Every compaction summary ends with a footer telling the model the tool
 exists, so after a compaction the model reaches for `recall` instead of
 re-reading files or re-running commands to reconstruct what it forgot.
 
-## 3. Compaction modes (`context.mode`)
+## 3. `note` tool + pre-compaction reminder (model-written durable state)
+
+The deterministic digest is mechanical: it keeps the *shape* of history but
+cannot know which single fact is load-bearing. Codex's answer is notes —
+the model itself maintains a checkpoint that survives window cutovers.
+`context-keeper` ports that:
+
+- **`note`** records one short fact (a decision + reason, a user
+  constraint, an exact value/path, a hard-won gotcha). Notes are stored as
+  session entries and **pinned verbatim into every future compaction
+  digest** — in arc mode as a "Pinned notes" section, in checkpoint mode
+  appended after the LLM checkpoint (the checkpoint may paraphrase; notes
+  never do). A ~4k-char budget applies, newest notes win, and older ones
+  stay searchable via recall.
+- **Pre-compaction reminder**: once per compaction cycle, when the context
+  comes within `reminderTokens` (default 8000) of `compactAtTokens`, a
+  hidden message tells the model the cut is coming and to pin anything
+  load-bearing *now* — Codex's `<context_window_reminder>` in pi terms. It
+  fires on turn end, so long tool loops get it mid-run; an injected message
+  is a tail append, so the provider prefix cache is untouched.
+
+The tool description tells the model NOT to note things that are easy to
+rediscover (file contents, command output) — recall covers those; notes are
+for decisions and invariants.
+
+## 4. Compaction modes (`context.mode`)
 
 ### `"arc"` (default) — deterministic digest
 
@@ -134,11 +190,13 @@ ARC's core result is that the *summarization model* is the weak link:
 paraphrase drops needles that deterministic stubs keep findable. So the
 default compaction writes **no-LLM digest** of the compacted span:
 
+- pinned notes first — the model's own verbatim survivors;
 - one terse line per step — user asks, assistant actions with tool calls,
   tool results as head/tail stubs with their size;
 - thinking blocks dropped entirely;
 - a carried-forward section from the previous digest (capped, oldest first
-  to go);
+  to go; its old pinned-notes section is stripped since notes are
+  re-collected fresh each compaction);
 - a budget (~10k chars): oldest lines fall off first, and the recall footer
   covers everything omitted.
 
@@ -181,7 +239,9 @@ forward — future training data for a better local summarizer.
   "mode": "arc",                 // arc (deterministic, default) | checkpoint (LLM) | off
   "compactAtTokens": 60000,      // early compaction while a local provider is active (0/unset = pi default)
   "idleCompactMinutes": 5,       // idle compaction past half the threshold (0/unset = off)
-  "recall": true,                // transcript search tool (default on)
+  "recall": true,                // transcript search + entry read-back (default on)
+  "notes": true,                 // note tool + verbatim digest pinning (default on)
+  "reminderTokens": 8000,        // pre-compaction reminder lead (0 = off)
   "pruner": true,                // ingestion-time trim of big shell outputs (default on)
   "prunerThresholdChars": 6000,
   "prunerHeadChars": 1500,
@@ -191,4 +251,4 @@ forward — future training data for a better local summarizer.
 }
 ```
 
-Cycle the mode and toggle pruner/recall from `/geocine context`.
+Cycle the mode and toggle pruner/recall/notes from `/geocine context`.

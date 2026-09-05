@@ -16,7 +16,7 @@ is logged as future fine-tuning data.
 | `ask-user` | `ask_user` tool: lets the model ask you one question (pick-one options or free text) via pi's own dialogs — so it never improvises file/plugin-based prompting mechanisms from its training data. | `ask_user` tool |
 | `watchdog` | Loop/fail-streak detection (deterministic counters + optional mini-LLM verdict); injects "Located" hints. | Automatic. `/watchdog` |
 | `rescue` | Captures manual local-to-frontier `/model` switches as training episodes; drafts lessons from them. | Automatic. `/distill` |
-| `context-keeper` | Long-session context management: early + idle compaction for local providers, deterministic ARC-style compaction digest (no model call; LLM checkpoint optional), ingestion-time pruning of big shell outputs, and `recall` transcript search so compaction is never lossy. | Automatic. `recall` tool |
+| `context-keeper` | Long-session context management: early + idle compaction for local providers, deterministic ARC-style compaction digest (no model call; LLM checkpoint optional), model-written `note`s pinned verbatim across compactions with a pre-cut reminder, ingestion-time pruning of big shell outputs, and `recall` transcript search (exact + BM25 fallback + full entry read-back) so compaction is never lossy. | Automatic. `recall`, `note` tools |
 | `worked-timer` | Codex-style run timing: live elapsed on the "Working..." line, "Worked for Xm Ys · turns · tool calls" summary per run (approval-dialog wait time excluded). | Automatic |
 | `geocine-menu` | One hub menu for everything above. | `/geocine` |
 | `bash-repair` | Strips terminal noise; prepends compact failure summaries (go/cargo/pytest/node). | Automatic |

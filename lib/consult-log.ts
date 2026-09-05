@@ -153,6 +153,8 @@ export interface CompactionRecord extends BaseRecord {
 	tokensBefore: number;
 	messagesSummarized: number;
 	summaryChars: number;
+	/** Model-written notes pinned verbatim into the digest. */
+	notesPinned?: number;
 	outcome: "arc" | "custom" | "fallback_empty" | "fallback_error" | "fallback_not_smaller";
 	elapsedMs: number;
 	error?: string;

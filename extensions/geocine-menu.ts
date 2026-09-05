@@ -193,15 +193,17 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 		case "context": {
 			const c = cfg.context ?? {};
 			const mode = c.mode ?? (c.checkpoint === false ? "off" : "arc");
-			// pruner (ingestion-time, cache-neutral) and recall default ON.
+			// pruner (ingestion-time, cache-neutral), recall, notes default ON.
 			const state: Record<string, boolean> = {
 				pruner: c.pruner !== false,
 				recall: c.recall !== false,
+				notes: c.notes !== false,
 			};
 			const rows = [
 				`Compaction mode: ${mode.toUpperCase()} — cycle arc → checkpoint → off`,
 				`Ingestion pruner (shell outputs): ${onOff(state.pruner)} — toggle`,
 				`Recall tool: ${onOff(state.recall)} — toggle`,
+				`Note tool + digest pinning: ${onOff(state.notes)} — toggle`,
 			];
 			const picked = await ctx.ui.select(
 				`Context keeper (early compact: ${c.compactAtTokens ? `${c.compactAtTokens} tokens` : "pi default"}${c.idleCompactMinutes ? `, idle: ${c.idleCompactMinutes}m` : ""}):`,
@@ -217,7 +219,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 				ctx.ui.notify(`context.mode: ${next} (persisted)`, "info");
 				return;
 			}
-			const key = picked.startsWith("Ingestion") ? "pruner" : "recall";
+			const key = picked.startsWith("Ingestion") ? "pruner" : picked.startsWith("Note") ? "notes" : "recall";
 			const next = !state[key];
 			updateGlobalConfig((g) => {
 				g.context = { ...(g.context ?? {}), [key]: next };
