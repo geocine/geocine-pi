@@ -23,11 +23,15 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+	activeMode,
 	type ConsultantConfig,
 	type GeocineConfig,
 	loadConfig,
 	logDir,
+	modeConsultants,
 	resolveConsultant,
+	resolveRescuer,
+	shouldPrescreen,
 	updateGlobalConfig,
 } from "../lib/config.ts";
 import {
@@ -243,10 +247,15 @@ function rosterLine(name: string, c: ConsultantConfig, isDefault: boolean): stri
 	return `${name}${isDefault ? " (default)" : ""} — ${role} [${c.provider ?? "?"}/${c.model}]`;
 }
 
-/** One-line-per-consultant roster, used in the tool description and dialogs. */
+/**
+ * One-line-per-consultant roster, used in the tool description and dialogs.
+ * Mode-filtered: only rescuers selectable under the active mode appear.
+ */
 export function buildRoster(cfg: GeocineConfig): string {
-	return Object.entries(cfg.consultants)
-		.map(([n, c]) => rosterLine(n, c, n === cfg.defaultConsultant))
+	const active = activeMode(cfg);
+	const defaultName = active?.mode.defaultConsultant ?? cfg.defaultConsultant;
+	return Object.entries(modeConsultants(cfg))
+		.map(([n, c]) => rosterLine(n, c, n === defaultName))
 		.join("\n");
 }
 
@@ -304,8 +313,9 @@ async function gateConsult(
 
 	if (choice === USE) return take("user_yes", proposedBy);
 	if (choice === PICK) {
-		const names = Object.keys(cfg.consultants);
-		const labels = names.map((n) => rosterLine(n, cfg.consultants[n], n === cfg.defaultConsultant));
+		const pool = modeConsultants(cfg);
+		const names = Object.keys(pool);
+		const labels = names.map((n) => rosterLine(n, pool[n], n === cfg.defaultConsultant));
 		const picked = await ctx.ui.select("Who should rescue this?", labels);
 		if (!picked) return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
 		const name = names[labels.indexOf(picked)];
@@ -313,7 +323,7 @@ async function gateConsult(
 			approved: true,
 			approval: "user_yes",
 			name,
-			consultant: cfg.consultants[name],
+			consultant: pool[name],
 			chosenBy: name === proposedName ? proposedBy : "user_override",
 		};
 	}
@@ -383,6 +393,7 @@ async function consult(
 		approval,
 		proposedConsultant: routing?.proposedConsultant,
 		chosenBy: routing?.chosenBy,
+		mode: activeMode(cfg)?.name,
 	});
 
 	// 1. Stage (context firewall) unless running in place.
@@ -407,10 +418,11 @@ async function consult(
 	// into reviewing the absence of files instead of the question).
 	const noWorkspace = staging !== undefined && staging.files.length === 0;
 
-	// 2. Pre-screen (strict consultants only; nothing to screen when no
-	// files were staged — the question text alone travels regardless).
+	// 2. Pre-screen. The active mode's policy wins ("force" screens every
+	// staged consult, "skip" screens none); otherwise the per-consultant
+	// flag decides. Nothing to screen when no files were staged.
 	let reframe: string | undefined;
-	if (consultant.prescreen && staging && !noWorkspace) {
+	if (shouldPrescreen(cfg, consultant) && staging && !noWorkspace) {
 		notify(`consult: pre-screening ${staging.files.length} staged file(s) locally…`);
 		const verdict = await prescreen(cfg, cwd, staging, question, signal);
 		appendRecord(dir, {
@@ -427,8 +439,10 @@ async function consult(
 		});
 		if (verdict.risk === "high") {
 			cleanupStaging(staging);
-			const lenient = Object.entries(cfg.consultants)
-				.filter(([, c]) => !c.prescreen)
+			// Suggest consultants this content CAN go to: jail "none" ones
+			// never stage (so never screen), plus unscreened staged ones.
+			const lenient = Object.entries(modeConsultants(cfg))
+				.filter(([n, c]) => n !== consultantName && ((c.jail ?? "staged") === "none" || !shouldPrescreen(cfg, c)))
 				.map(([n]) => n);
 			return {
 				note:
@@ -548,7 +562,8 @@ export default function advisor(pi: ExtensionAPI) {
 		description:
 			"Ask a stronger consultant model for advice when stuck, when a plan is needed for a hard task, or after repeated failed attempts. Stage ONLY the files needed to answer the question: the consultant can read nothing else, and staged bytes are the cost of the call. Returns one advisory note.\n" +
 			"Pick the consultant whose role fits the problem:\n" +
-			(rosterAtLoad || "(no consultants configured)"),
+			(rosterAtLoad || "(no consultants configured)") +
+			"\nThe active session mode may narrow this set; an unavailable name returns an error listing who is available.",
 		promptSnippet: "Consult a stronger model with a question plus a minimal set of relevant files",
 		promptGuidelines: [
 			"Use consult after several failed attempts at the same problem, before trying the same approach again.",
@@ -576,7 +591,7 @@ export default function advisor(pi: ExtensionAPI) {
 		}),
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const cfg = loadConfig(ctx.cwd);
-			const resolved = resolveConsultant(cfg, params.consultant);
+			const resolved = resolveRescuer(cfg, params.consultant);
 			if ("error" in resolved) {
 				return { content: [{ type: "text", text: resolved.error }], details: {} };
 			}
@@ -702,7 +717,7 @@ export default function advisor(pi: ExtensionAPI) {
 				return;
 			}
 			const cfg = loadConfig(ctx.cwd);
-			const resolved = resolveConsultant(cfg, consultantName);
+			const resolved = resolveRescuer(cfg, consultantName);
 			if ("error" in resolved) {
 				ctx.ui.notify(resolved.error, "error");
 				return;
@@ -749,17 +764,26 @@ export default function advisor(pi: ExtensionAPI) {
 				ctx.ui.notify("No consultants configured. See geocine.example.json in the geocine-pi package.", "error");
 				return;
 			}
+			const active = activeMode(cfg);
+			const pool = modeConsultants(cfg);
+			const defaultName = active?.mode.defaultConsultant ?? cfg.defaultConsultant;
 			const lines = names.map(([name, c]) => {
 				const flags = [
 					c.jail ?? "staged",
-					c.prescreen ? "prescreen" : "direct",
+					shouldPrescreen(cfg, c) ? "prescreen" : "direct",
 					c.autoApprove ? "auto-approved" : "",
-					name === cfg.defaultConsultant ? "DEFAULT" : "",
+					name === defaultName ? "DEFAULT" : "",
+					active && !pool[name] ? `unavailable in mode "${active.name}"` : "",
 				]
 					.filter(Boolean)
 					.join(", ");
 				return `${name}: ${c.provider ?? "?"}/${c.model} (${flags})${c.role ? ` — ${c.role}` : ""}`;
 			});
+			if (active) {
+				lines.unshift(
+					`mode: ${active.name}${active.mode.description ? ` — ${active.mode.description}` : ""} (prescreen: ${active.mode.prescreen ?? "consultant"})`,
+				);
+			}
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});

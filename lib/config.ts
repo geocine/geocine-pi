@@ -169,12 +169,48 @@ export interface QwenConfig {
 	level?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
+export interface HarnessConfig {
+	/**
+	 * Transparent tool aliasing: advertise each model family's trained tool
+	 * names/schemas on the wire while pi stays canonical. Default true.
+	 */
+	aliases?: boolean;
+}
+
+export interface ModeConfig {
+	/** One line shown in menus (e.g. "RE / sensitive content"). */
+	description?: string;
+	/**
+	 * Consultant names selectable while this mode is active (both for the
+	 * LLM-invoked tool and /consult). Unset = all consultants.
+	 */
+	consultants?: string[];
+	/** Default rescuer while this mode is active (overrides defaultConsultant). */
+	defaultConsultant?: string;
+	/**
+	 * Prescreen policy for staged consults in this mode:
+	 *  - "consultant" (default): per-consultant `prescreen` flag decides.
+	 *  - "force": every staged consult is prescreened, whatever the flag —
+	 *    for sessions whose content risks guardrail false positives.
+	 *  - "skip": never prescreen — for plain coding sessions.
+	 */
+	prescreen?: "consultant" | "force" | "skip";
+}
+
 export const DEFAULT_LOCAL_PROVIDERS = ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"];
 
 export interface GeocineConfig {
 	consultants: Record<string, ConsultantConfig>;
 	/** Name of the default consultant for /consult and the consult tool. */
 	defaultConsultant?: string;
+	/** Named session profiles (consultant set + default + prescreen policy). */
+	modes?: Record<string, ModeConfig>;
+	/**
+	 * Mode active by default. A project .pi/geocine.json can pin a different
+	 * one (e.g. "sensitive" in an RE folder); /geocine mode switches it for
+	 * the current session without touching config files.
+	 */
+	mode?: string;
 	watchdog?: WatchdogConfig;
 	prescreen?: PrescreenConfig;
 	docker?: DockerConfig;
@@ -182,6 +218,7 @@ export interface GeocineConfig {
 	approval?: ApprovalConfig;
 	context?: ContextConfig;
 	qwen?: QwenConfig;
+	harness?: HarnessConfig;
 	/** Directory for decision logs. Default ~/.pi/agent/consult-log */
 	logDir?: string;
 }
@@ -203,6 +240,8 @@ export function loadConfig(cwd?: string): GeocineConfig {
 	const merged: GeocineConfig = {
 		consultants: { ...(global.consultants ?? {}), ...(project?.consultants ?? {}) },
 		defaultConsultant: project?.defaultConsultant ?? global.defaultConsultant,
+		modes: { ...(global.modes ?? {}), ...(project?.modes ?? {}) },
+		mode: project?.mode ?? global.mode,
 		watchdog: { ...(global.watchdog ?? {}), ...(project?.watchdog ?? {}) },
 		prescreen: { ...(global.prescreen ?? {}), ...(project?.prescreen ?? {}) },
 		docker: { ...(global.docker ?? {}), ...(project?.docker ?? {}) },
@@ -210,11 +249,60 @@ export function loadConfig(cwd?: string): GeocineConfig {
 		approval: { ...(global.approval ?? {}), ...(project?.approval ?? {}) },
 		context: { ...(global.context ?? {}), ...(project?.context ?? {}) },
 		qwen: { ...(global.qwen ?? {}), ...(project?.qwen ?? {}) },
+		harness: { ...(global.harness ?? {}), ...(project?.harness ?? {}) },
 		logDir: project?.logDir ?? global.logDir,
 	};
 	return merged;
 }
 
+// ---------- session modes ----------
+
+// Session-scoped mode override, set from /geocine mode. All extensions share
+// this module instance, so the override is visible everywhere immediately;
+// it does not survive a restart (the config `mode` field is the default).
+let sessionModeOverride: string | null | undefined;
+
+/** Override the active mode for this session. null = force "no mode". */
+export function setSessionMode(name: string | null | undefined): void {
+	sessionModeOverride = name;
+}
+
+export interface ActiveMode {
+	name: string;
+	mode: ModeConfig;
+	/** True when the mode comes from the session override, not config. */
+	sessionOverride: boolean;
+}
+
+/** The mode in effect: session override → project/global config `mode`. */
+export function activeMode(cfg: GeocineConfig): ActiveMode | undefined {
+	const fromSession = sessionModeOverride !== undefined;
+	const name = fromSession ? sessionModeOverride : cfg.mode;
+	if (!name) return undefined;
+	const mode = cfg.modes?.[name];
+	return mode ? { name, mode, sessionOverride: fromSession } : undefined;
+}
+
+/** Consultants selectable as rescuers under the active mode. */
+export function modeConsultants(cfg: GeocineConfig): Record<string, ConsultantConfig> {
+	const active = activeMode(cfg);
+	if (!active?.mode.consultants?.length) return cfg.consultants;
+	const allowed = new Set(active.mode.consultants);
+	return Object.fromEntries(Object.entries(cfg.consultants).filter(([n]) => allowed.has(n)));
+}
+
+/** Effective prescreen decision for one consultant under the active mode. */
+export function shouldPrescreen(cfg: GeocineConfig, consultant: ConsultantConfig): boolean {
+	const policy = activeMode(cfg)?.mode.prescreen ?? "consultant";
+	if (policy === "force") return true;
+	if (policy === "skip") return false;
+	return consultant.prescreen === true;
+}
+
+/**
+ * Resolve a consultant by name with NO mode filtering. For infrastructure
+ * roles (prescreen screener, distiller) that must work in every mode.
+ */
 export function resolveConsultant(
 	cfg: GeocineConfig,
 	name?: string,
@@ -230,6 +318,37 @@ export function resolveConsultant(
 	const consultant = cfg.consultants[wanted];
 	if (!consultant) {
 		return { error: `Unknown consultant "${wanted}". Configured: ${names.join(", ")}` };
+	}
+	return { name: wanted, consultant };
+}
+
+/**
+ * Resolve a RESCUER: like resolveConsultant, but the active mode's
+ * consultant set and default apply. Used by the consult tool and /consult,
+ * so a "sensitive" session cannot accidentally route content to a
+ * consultant excluded from that mode.
+ */
+export function resolveRescuer(
+	cfg: GeocineConfig,
+	name?: string,
+): { name: string; consultant: ConsultantConfig } | { error: string } {
+	const active = activeMode(cfg);
+	const pool = modeConsultants(cfg);
+	const poolNames = Object.keys(pool);
+	if (poolNames.length === 0) {
+		return active
+			? { error: `Mode "${active.name}" allows no configured consultants. Fix modes.${active.name}.consultants in geocine.json.` }
+			: { error: `No consultants configured. Create ${CONFIG_FILE} (see geocine.example.json).` };
+	}
+	const wanted = name ?? active?.mode.defaultConsultant ?? cfg.defaultConsultant ?? poolNames[0];
+	const consultant = pool[wanted];
+	if (!consultant) {
+		if (active && cfg.consultants[wanted]) {
+			return {
+				error: `Consultant "${wanted}" is not available in mode "${active.name}". Available: ${poolNames.join(", ")}. Switch modes via /geocine mode if this is intentional.`,
+			};
+		}
+		return { error: `Unknown consultant "${wanted}". Available: ${poolNames.join(", ")}` };
 	}
 	return { name: wanted, consultant };
 }

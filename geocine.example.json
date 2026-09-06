@@ -3,6 +3,23 @@
 
 	"defaultConsultant": "frontier",
 
+	"mode": "coding",
+	"modes": {
+		"$comment": "Session profiles: which consultants are selectable, who rescues by default, and the prescreen policy ('skip' = never, 'force' = every staged consult, 'consultant' = per-consultant flag). Switch via /geocine mode (session or persisted); pin one per project with 'mode' in .pi/geocine.json (e.g. 'sensitive' in an RE folder).",
+		"coding": {
+			"description": "normal dev work",
+			"consultants": ["frontier", "local-big"],
+			"defaultConsultant": "frontier",
+			"prescreen": "skip"
+		},
+		"sensitive": {
+			"description": "RE / sensitive content",
+			"consultants": ["abliterated", "local-big", "frontier"],
+			"defaultConsultant": "abliterated",
+			"prescreen": "force"
+		}
+	},
+
 	"consultants": {
 		"frontier": {
 			"$comment": "OAuth providers (pi /login, stored in ~/.pi/agent/auth.json) need no envKeys: consultant children are pi processes on the host and inherit auth. envKeys are only for API-key providers inside the docker jail.",
@@ -68,6 +85,11 @@
 		"$comment": "Persisted Qwen thinking state set via /harness (auto mode + budget level) — survives restarts and /reload.",
 		"auto": true,
 		"level": "medium"
+	},
+
+	"harness": {
+		"$comment": "Transparent tool aliasing: advertise each model family's RL-trained tool names/schemas on the wire (qwen-code, grok-build, codex dialects) while pi stays canonical. Set false to disable renaming; the trained-tool equivalents (todo, web_fetch, web_search, apply_patch) stay registered either way.",
+		"aliases": true
 	},
 
 	"docker": {

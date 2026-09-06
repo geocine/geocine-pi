@@ -52,6 +52,8 @@ export interface ConsultRequestRecord extends BaseRecord {
 	 */
 	proposedConsultant?: string;
 	chosenBy?: "model" | "default" | "user_override" | "auto";
+	/** Session mode active when the consult was requested (routing feature). */
+	mode?: string;
 }
 
 export interface StagedFile {

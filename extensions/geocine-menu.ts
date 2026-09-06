@@ -9,25 +9,81 @@
 // config on every event, so changes apply immediately — no /reload. A
 // project-level .pi/geocine.json still overrides the global file.
 //
-// Jump straight to a section: /geocine consultants|approval|context|watchdog|rescue|distill|log|lessons|config
+// Jump straight to a section: /geocine mode|consultants|approval|context|watchdog|rescue|data|distill|log|lessons|config
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+	activeMode,
 	CONFIG_FILE,
 	type GeocineConfig,
 	loadConfig,
 	logDir,
+	type ModeConfig,
+	modeConsultants,
+	setSessionMode,
 	updateGlobalConfig,
 } from "../lib/config.ts";
 import { distillRescue, latestRescueRecord, LESSONS_DIR } from "../lib/distill.ts";
 
-const SECTIONS = ["consultants", "approval", "context", "watchdog", "rescue", "distill", "log", "lessons", "config"] as const;
+const SECTIONS = ["mode", "consultants", "approval", "context", "watchdog", "rescue", "data", "distill", "log", "lessons", "config"] as const;
 type Section = (typeof SECTIONS)[number];
 
 function onOff(v: boolean): string {
 	return v ? "ON" : "OFF";
+}
+
+function describeMode(m: ModeConfig): string {
+	const parts: string[] = [];
+	if (m.description) parts.push(m.description);
+	parts.push(m.consultants?.length ? m.consultants.join(", ") : "all consultants");
+	parts.push(`prescreen ${m.prescreen ?? "per-consultant"}`);
+	return parts.join(" · ");
+}
+
+const EXAMPLE_MODES = [
+	'"mode": "coding",',
+	'"modes": {',
+	'  "coding":    { "description": "normal dev work", "consultants": ["frontier", "local-big"], "defaultConsultant": "frontier", "prescreen": "skip" },',
+	'  "sensitive": { "description": "RE / sensitive content", "consultants": ["abliterated", "local-big"], "defaultConsultant": "abliterated", "prescreen": "force" }',
+	"}",
+].join("\n");
+
+async function modeMenu(ctx: ExtensionContext, cfg: GeocineConfig): Promise<void> {
+	// "$comment" and friends are JSON-comment convention keys, not modes.
+	const modes = Object.entries(cfg.modes ?? {}).filter(([n]) => !n.startsWith("$"));
+	if (modes.length === 0) {
+		ctx.ui.notify(
+			`No modes configured. A mode is a session profile: which consultants are selectable, who rescues by default, and whether staged consults get the guardrail prescreen. Add to ${CONFIG_FILE}:\n\n${EXAMPLE_MODES}`,
+			"info",
+		);
+		return;
+	}
+	const active = activeMode(cfg);
+	const labels = modes.map(([n, m]) => `${n === active?.name ? "* " : "  "}${n} — ${describeMode(m)}`);
+	const NONE = `${active ? "  " : "* "}(no mode) — all consultants, per-consultant prescreen`;
+	const picked = await ctx.ui.select(
+		`Session mode (* = active${active?.sessionOverride ? ", session override" : ""}):`,
+		[...labels, NONE],
+	);
+	if (!picked) return;
+	const name = picked === NONE ? null : modes[labels.indexOf(picked)][0];
+	const SESSION = "This session only";
+	const PERSIST = "Save as default (geocine.json)";
+	const scope = await ctx.ui.select(`Apply mode "${name ?? "none"}":`, [SESSION, PERSIST]);
+	if (!scope) return;
+	if (scope === SESSION) {
+		setSessionMode(name);
+		ctx.ui.notify(`Mode for this session: ${name ?? "none"}. (Config default returns next session.)`, "info");
+	} else {
+		setSessionMode(undefined);
+		updateGlobalConfig((g) => {
+			if (name) g.mode = name;
+			else delete g.mode;
+		});
+		ctx.ui.notify(`Default mode: ${name ?? "none"} (persisted). Tip: pin a mode per project via .pi/geocine.json.`, "info");
+	}
 }
 
 async function consultantsMenu(ctx: ExtensionContext, cfg: GeocineConfig): Promise<void> {
@@ -156,6 +212,20 @@ async function editConfig(ctx: ExtensionContext): Promise<void> {
 async function runSection(section: Section, ctx: ExtensionContext): Promise<void> {
 	const cfg = loadConfig(ctx.cwd);
 	switch (section) {
+		case "mode":
+			await modeMenu(ctx, cfg);
+			return;
+		case "data": {
+			const latest = latestRescueRecord(cfg);
+			const LOG = "Consult-log stats (this month)";
+			const DISTILL = `Distill latest rescue${latest ? ` (${latest.toModel}, ${latest.ts.slice(0, 10)})` : " — none captured yet"}`;
+			const LESSONS = "Lesson drafts";
+			const picked = await ctx.ui.select("Training data:", [LOG, DISTILL, LESSONS]);
+			if (picked === LOG) await runSection("log", ctx);
+			else if (picked === DISTILL) await runSection("distill", ctx);
+			else if (picked === LESSONS) await runSection("lessons", ctx);
+			return;
+		}
 		case "consultants":
 			await consultantsMenu(ctx, cfg);
 			return;
@@ -274,7 +344,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 
 export default function geocineMenu(pi: ExtensionAPI) {
 	pi.registerCommand("geocine", {
-		description: "geocine-pi hub: consultants, context keeper, watchdog/rescue toggles, distill, logs, lessons, config",
+		description: "geocine-pi hub: session mode, consultants, approval, context keeper, watchdog/rescue, training data, config",
 		getArgumentCompletions: (prefix: string) => {
 			const items = SECTIONS.filter((s) => s.startsWith(prefix.toLowerCase())).map((s) => ({
 				value: s,
@@ -292,42 +362,54 @@ export default function geocineMenu(pi: ExtensionAPI) {
 				await runSection(jump, ctx);
 				return;
 			}
-			// Hub loop: stay in the menu until cancel/escape.
+			// Hub loop: stay in the menu until cancel/escape. Every row is
+			// "Thing: current state" so the hub doubles as a status readout.
 			for (;;) {
 				const cfg = loadConfig(ctx.cwd);
-				const watchdogOn = cfg.watchdog?.enabled !== false;
-				const rescueOn = cfg.rescue?.enabled !== false;
-				const latest = latestRescueRecord(cfg);
+				const active = activeMode(cfg);
+				const pool = Object.keys(modeConsultants(cfg));
+				const total = Object.keys(cfg.consultants).length;
+				const defaultName = active?.mode.defaultConsultant ?? cfg.defaultConsultant ?? "none";
+				const approvalMode = cfg.approval?.consultTool ?? "ask";
+				const contextMode = cfg.context?.mode ?? (cfg.context?.checkpoint === false ? "off" : "arc");
 				const entries: Array<{ label: string; section: Section }> = [
 					{
-						label: `Consultants (${Object.keys(cfg.consultants).length}, default: ${cfg.defaultConsultant ?? "none"})`,
+						label: active
+							? `Mode: ${active.name}${active.sessionOverride ? " (this session)" : ""} — ${describeMode(active.mode)}`
+							: `Mode: none — all consultants, per-consultant prescreen`,
+						section: "mode",
+					},
+					{
+						label: `Consultants: ${pool.length < total ? `${pool.length} of ${total} in mode` : total} · default: ${defaultName}`,
 						section: "consultants",
 					},
 					{
-					label: `Consult approval: ${(cfg.approval?.consultTool ?? "ask").toUpperCase()}${
-						Object.values(cfg.consultants).some((c) => c.autoApprove) ? " (+always-allows)" : ""
-					}`,
-					section: "approval",
-				},
-				{
-					label: `Context keeper: ${(cfg.context?.mode ?? (cfg.context?.checkpoint === false ? "off" : "arc")).toUpperCase()}, pruner ${onOff(cfg.context?.pruner !== false)}, recall ${onOff(cfg.context?.recall !== false)}`,
-					section: "context",
-				},
-				{ label: `Watchdog: ${onOff(watchdogOn)} — toggle`, section: "watchdog" },
-					{ label: `Rescue capture: ${onOff(rescueOn)} — toggle`, section: "rescue" },
-					{
-						label: `Distill latest rescue${latest ? ` (${latest.toModel}, ${latest.ts.slice(0, 10)})` : " (none yet)"}`,
-						section: "distill",
+						label:
+							approvalMode === "ask"
+								? `Consult approval: ASK — prompts before LLM-invoked consults${Object.values(cfg.consultants).some((c) => c.autoApprove) ? " (some always-allowed)" : ""}`
+								: "Consult approval: AUTO — LLM consults run without asking",
+						section: "approval",
 					},
-					{ label: "Consult-log stats (this month)", section: "log" },
-					{ label: "Lesson drafts", section: "lessons" },
+					{
+						label: `Context keeper: ${contextMode.toUpperCase()} · pruner ${onOff(cfg.context?.pruner !== false)} · recall ${onOff(cfg.context?.recall !== false)}`,
+						section: "context",
+					},
+					{
+						label: `Watchdog: ${onOff(cfg.watchdog?.enabled !== false)} — select to turn ${cfg.watchdog?.enabled !== false ? "OFF" : "ON"}`,
+						section: "watchdog",
+					},
+					{
+						label: `Rescue capture: ${onOff(cfg.rescue?.enabled !== false)} — select to turn ${cfg.rescue?.enabled !== false ? "OFF" : "ON"}`,
+						section: "rescue",
+					},
+					{ label: "Training data: consult-log stats · rescue distill · lessons", section: "data" },
 					{ label: "Edit geocine.json", section: "config" },
 				];
 				const picked = await ctx.ui.select("geocine-pi:", entries.map((e) => e.label));
 				if (!picked) return;
 				const section = entries.find((e) => e.label === picked)!.section;
 				await runSection(section, ctx);
-				if (section === "consultants" || section === "config" || section === "distill") return;
+				if (section === "consultants" || section === "config") return;
 			}
 		},
 	});

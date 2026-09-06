@@ -12,15 +12,15 @@ is logged as future fine-tuning data.
 
 | Extension | What it does | Invocation |
 | --- | --- | --- |
-| `advisor` | `consult` tool: stages a minimal snapshot, optional guardrail pre-screen, runs a consultant, returns one advisory note. Rescuer proposed by role; user approves, overrides, or denies. | `consult` tool, `/consult`, `/consultants` |
+| `advisor` | `consult` tool: stages a minimal snapshot, optional guardrail pre-screen, runs a consultant, returns one advisory note. Rescuer proposed by role; user approves, overrides, or denies. Session modes (e.g. `coding` vs `sensitive`) scope which consultants are selectable and whether staged consults are force-prescreened — pin a mode per project or switch via `/geocine mode`. | `consult` tool, `/consult`, `/consultants` |
 | `ask-user` | `ask_user` tool: lets the model ask you one question (pick-one options or free text) via pi's own dialogs — so it never improvises file/plugin-based prompting mechanisms from its training data. | `ask_user` tool |
 | `watchdog` | Loop/fail-streak detection (deterministic counters + optional mini-LLM verdict); injects "Located" hints. | Automatic. `/watchdog` |
 | `rescue` | Captures manual local-to-frontier `/model` switches as training episodes; drafts lessons from them. | Automatic. `/distill` |
 | `context-keeper` | Long-session context management: early + idle compaction for local providers, deterministic ARC-style compaction digest (no model call; LLM checkpoint optional), model-written `note`s pinned verbatim across compactions with a pre-cut reminder, ingestion-time pruning of big shell outputs, and `recall` transcript search (exact + BM25 fallback + full entry read-back) so compaction is never lossy. | Automatic. `recall`, `note` tools |
 | `worked-timer` | Codex-style run timing: live elapsed on the "Working..." line, "Worked for Xm Ys · turns · tool calls" summary per run (approval-dialog wait time excluded). | Automatic |
-| `geocine-menu` | One hub menu for everything above. | `/geocine` |
+| `geocine-menu` | One hub menu for everything above; every row shows its current state (mode, consultants, approval, context, watchdog, rescue, training data). | `/geocine` |
 | `bash-repair` | Strips terminal noise; prepends compact failure summaries (go/cargo/pytest/node). | Automatic |
-| `models/` | Per-model-family harness registry, one file per family. Qwen: tool-call recovery, llama.cpp schema fixes, thinking budgets. Grok and OpenAI: declared slots, no behaviors yet. | Automatic. `/harness` |
+| `models/` | Per-model-family harness registry, one file per family. Advertises each model's RL-trained tool dialect on the wire (qwen-code names for Qwen, grok-build names for Grok, codex `exec_command` + a native `apply_patch` for OpenAI) while pi's tools and transcript stay canonical. Fills the trained-tool gaps pi does not cover: a shared `todo` plan tool (aliased as `todo_write` / `update_plan`), `web_fetch` + `web_search` (qwen/grok only), `view_image`, and dialect envelopes over `ask_user`. Model-owned tools are hidden from models that were not trained on them. Plus Qwen tool-call recovery, llama.cpp schema fixes, and thinking budgets. | Automatic. `/harness` |
 | `baseten-limits` | Client-side RPM/TPM pacing + server `429 retry_after` handling for Baseten. | Automatic |
 
 ## Install

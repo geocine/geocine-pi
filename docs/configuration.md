@@ -12,6 +12,38 @@ cp geocine.example.json ~/.pi/agent/geocine.json   # and edit
 Extensions re-read the config on every event, so edits apply immediately —
 no reload. `/geocine config` edits it in place with JSON validation.
 
+## Session modes
+
+A mode is a session profile: some sessions are plain coding, others handle
+content (reverse engineering, decompiled binaries, security material) that
+strict cloud models falsely refuse — those need a different consultant set
+and a different prescreen posture.
+
+`modes.<name>`:
+
+- `description` — one line shown in menus.
+- `consultants` — names selectable as rescuers while this mode is active
+  (applies to both the LLM-invoked `consult` tool and `/consult`; anything
+  else returns an error naming the available set). Unset = all.
+- `defaultConsultant` — default rescuer for this mode.
+- `prescreen` — policy override: `"skip"` (never screen — plain coding),
+  `"force"` (screen every staged consult, whatever the per-consultant flag
+  says — sensitive sessions), or `"consultant"` (default: the per-consultant
+  flag decides). Jail-`"none"` consultants never stage files, so they are
+  never screened regardless.
+
+Which mode is active, in priority order:
+
+1. Session override — `/geocine mode`, "This session only".
+2. Project pin — `"mode": "sensitive"` in the project's `.pi/geocine.json`
+   (set-and-forget for an RE folder).
+3. Global default — `"mode": "coding"` in `~/.pi/agent/geocine.json`.
+
+Example (from `geocine.example.json`): `coding` allows frontier + local-big
+with prescreen skipped; `sensitive` defaults to the abliterated consultant
+and force-prescreens anything that still goes to a strict cloud model. The
+active mode is logged on every consult request as a routing feature.
+
 ## Consultants
 
 `consultants.<name>` — provider/model plus policy:
@@ -103,6 +135,34 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
   command; survives restarts and `/reload`).
 
 See [context.md](context.md) for the design and the research behind it.
+
+## Model harnesses
+
+- `harness.aliases` — transparent tool aliasing (default true). Each model
+  family's harness advertises the tool names and parameter schemas the model
+  was RL-trained on (qwen-code dialect for Qwen, grok-build dialect for
+  Grok, codex `exec_command` for OpenAI) while pi's registry and the stored
+  transcript stay canonical. Outbound requests rename tool definitions, the
+  system prompt tool list, and replayed history; finalized tool calls are
+  mapped back before execution. Set to `false` to send pi's canonical names
+  unchanged. Model-owned tools (e.g. `apply_patch` for OpenAI) are only
+  advertised while their harness is active regardless of this setting.
+
+The harness layer also implements trained tools pi lacks, so every family's
+core RL toolset resolves to something real:
+
+- `todo` — session plan list, persisted across restarts and compactions.
+  Advertised as `todo_write` to Qwen and Grok (Grok's merge-by-id semantics
+  supported) and as `update_plan` to OpenAI models. Canonical `todo` for
+  everyone else.
+- `web_fetch` / `web_search` — URL fetch (HTML stripped to readable text)
+  and DuckDuckGo search with domain filtering. Trained into qwen-code and
+  grok-build, so they are owned by those harnesses and hidden from other
+  models (codex web access is provider-hosted).
+- `ask_user_question` — Qwen and Grok's multi-question envelope, mapped
+  onto the single-question `ask_user` tool (first question is asked).
+- `view_image` — codex's attach-image-by-path tool, mapped onto pi `read`
+  for OpenAI models (codex models read text via `exec_command`, as trained).
 
 ## Rescue capture
 
