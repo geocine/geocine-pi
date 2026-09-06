@@ -15,6 +15,7 @@
 // llama-server --no-models-autoload --models-max 1 --host 127.0.0.1 --port 8080 -np 1 -ngl 99 -c 262144 -fa on --cache-type-k q4_0 --cache-type-v q4_0 --jinja
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { SelectItem } from "@earendil-works/pi-tui";
 import { loadConfig, updateGlobalConfig } from "../../lib/config.ts";
 import { msToSeconds, rekey, secondsToMs, type ToolAlias } from "./aliases.ts";
 import { type ModelHarness, modelBlob } from "./types.ts";
@@ -935,6 +936,30 @@ export const qwenHarness: ModelHarness = {
 		"llama.cpp: thinking control with budgets + Qwen3 sampling defaults (/harness <level>|auto)",
 	],
 	commandHint: "off|low|medium|high|xhigh|max|auto",
+	summary: "qwen-code tool dialect · call repair · llama.cpp schemas + thinking control",
+	menuItems() {
+		const items: SelectItem[] = [
+			{
+				value: "auto",
+				label: `auto ${autoThinking ? "ON" : "OFF"}`,
+				description: "enter toggles — think on user turns and tool errors, focus during tool loops",
+			},
+		];
+		for (const level of QWEN_LEVELS) {
+			const budget = LEVEL_BUDGETS[level];
+			items.push({
+				value: level,
+				label: `${level === manualLevel ? "* " : "  "}${level}`,
+				description:
+					level === "off"
+						? "thinking off (focus) — also exits auto"
+						: budget !== undefined
+							? `thinking budget ${budget} tokens`
+							: "no budget cap",
+			});
+		}
+		return items;
+	},
 	toolAliases: QWEN_ALIASES,
 	// Client web tools are trained in qwen-code and grok-build only; codex
 	// models get hosted web access, so these stay hidden elsewhere.

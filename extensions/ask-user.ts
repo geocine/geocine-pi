@@ -13,8 +13,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-
-const OTHER = "Other (type a reply)…";
+import { richSelect, type SelectItem } from "../lib/rich-select.ts";
 
 export default function askUser(pi: ExtensionAPI) {
 	pi.registerTool({
@@ -52,8 +51,20 @@ export default function askUser(pi: ExtensionAPI) {
 			const options = (params.options ?? []).map((o) => o.trim()).filter((o) => o.length > 0);
 			let answer: string | undefined;
 			if (options.length >= 2) {
-				answer = await ctx.ui.select(params.question, [...options.slice(0, 8), OTHER]);
-				if (answer === OTHER) answer = await ctx.ui.input(params.question);
+				const items: SelectItem[] = [
+					...options.slice(0, 8).map((o, i) => ({ value: `opt:${i}`, label: o, description: "" })),
+					{ value: "other", label: "Type an answer", description: "none of these — write a free-text reply" },
+				];
+				const picked = await richSelect(ctx, "The model has a question", items, {
+					header: [params.question],
+					labelWidth: 24,
+				});
+				answer =
+					picked === "other"
+						? await ctx.ui.input(params.question)
+						: picked?.startsWith("opt:")
+							? options[Number(picked.slice(4))]
+							: undefined;
 			} else {
 				answer = await ctx.ui.input(params.question);
 			}

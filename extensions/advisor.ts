@@ -42,6 +42,7 @@ import {
 	type StagedFile,
 } from "../lib/consult-log.ts";
 import { looksLikeRefusal, runPi, type PiProgress, type PiRunResult } from "../lib/pi-exec.ts";
+import { richSelect, type SelectItem } from "../lib/rich-select.ts";
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 const MAX_STAGED_FILE_BYTES = 256 * 1024;
@@ -300,25 +301,44 @@ async function gateConsult(
 		return take("headless", proposedBy);
 	}
 
-	const USE = `Use ${proposedName}${proposed.role ? ` — ${proposed.role}` : ""}`;
-	const PICK = "Choose a different rescuer…";
-	const NO = "No — deny (the local model should keep trying)";
-	const ALWAYS = `Always allow "${proposedName}" (persist)`;
-	const AUTO_ALL = "Auto-approve all consultants (persist)";
-	const choice = await ctx.ui.select(
-		`Rescuer proposed${proposedBy === "model" ? " by the model" : " (default)"}: ${proposedName} (${proposed.provider ?? "?"}/${proposed.model}, jail: ${proposed.jail ?? "staged"})\n` +
-			`Files: ${files.join(", ") || "(none)"}\nQ: ${question.slice(0, 300)}`,
-		[USE, PICK, NO, ALWAYS, AUTO_ALL],
+	const items: SelectItem[] = [
+		{
+			value: "use",
+			label: `Use ${proposedName}`,
+			description: proposed.role ?? `${proposed.provider ?? "?"}/${proposed.model}`,
+		},
+		{ value: "pick", label: "Pick another", description: "override the proposal with a different rescuer" },
+		{ value: "deny", label: "Deny", description: "no consultation — the local model keeps trying on its own" },
+		{
+			value: "always",
+			label: `Always allow ${proposedName}`,
+			description: "persist: this consultant stops asking",
+		},
+		{ value: "auto", label: "Auto-approve all", description: "persist: consult tool calls never ask again" },
+	];
+	const choice = await richSelect(
+		ctx,
+		`Consult approval — ${proposedName} proposed${proposedBy === "model" ? " by the model" : " (default)"}`,
+		items,
+		{
+			header: [
+				`${proposed.provider ?? "?"}/${proposed.model} · jail ${proposed.jail ?? "staged"}`,
+				`files: ${files.join(", ") || "(none)"}`,
+				`q: ${question.slice(0, 200)}${question.length > 200 ? "…" : ""}`,
+			],
+		},
 	);
 
-	if (choice === USE) return take("user_yes", proposedBy);
-	if (choice === PICK) {
+	if (choice === "use") return take("user_yes", proposedBy);
+	if (choice === "pick") {
 		const pool = modeConsultants(cfg);
-		const names = Object.keys(pool);
-		const labels = names.map((n) => rosterLine(n, pool[n], n === cfg.defaultConsultant));
-		const picked = await ctx.ui.select("Who should rescue this?", labels);
-		if (!picked) return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
-		const name = names[labels.indexOf(picked)];
+		const rosterItems: SelectItem[] = Object.entries(pool).map(([n, c]) => ({
+			value: n,
+			label: `${n === cfg.defaultConsultant ? "* " : "  "}${n}`,
+			description: `${c.role ?? "general consultant"} — ${c.provider ?? "?"}/${c.model} · ${c.jail ?? "staged"}`,
+		}));
+		const name = await richSelect(ctx, "Who should rescue this?", rosterItems);
+		if (!name) return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
 		return {
 			approved: true,
 			approval: "user_yes",
@@ -327,7 +347,7 @@ async function gateConsult(
 			chosenBy: name === proposedName ? proposedBy : "user_override",
 		};
 	}
-	if (choice === ALWAYS) {
+	if (choice === "always") {
 		updateGlobalConfig((g) => {
 			const existing = g.consultants?.[proposedName];
 			if (existing) existing.autoApprove = true;
@@ -339,14 +359,14 @@ async function gateConsult(
 		ctx.ui.notify(`"${proposedName}" is now auto-approved (geocine.json).`, "info");
 		return take("always_allow", proposedBy);
 	}
-	if (choice === AUTO_ALL) {
+	if (choice === "auto") {
 		updateGlobalConfig((g) => {
 			g.approval = { ...(g.approval ?? {}), consultTool: "auto" };
 		});
 		ctx.ui.notify("All consult tool calls are now auto-approved (geocine.json).", "info");
 		return take("auto", proposedBy);
 	}
-	// "No" or dialog cancelled.
+	// "Deny" or dialog cancelled.
 	return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
 }
 

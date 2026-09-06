@@ -122,6 +122,7 @@ export const openaiHarness: ModelHarness = {
 		"apply_patch: codex's freeform patch envelope (add/update/move/delete files) as a native tool",
 		"update_plan mapped to the shared todo tool; view_image mapped to pi read (text reads go via exec_command, as trained)",
 	],
+	summary: "codex dialect: exec_command shell, apply_patch tool, update_plan/view_image",
 	matches: (ctx) => modelProvider(ctx) === "openai" || modelBlob(ctx).includes("gpt-"),
 	toolAliases: OPENAI_ALIASES,
 	registerTools: registerApplyPatchTool,

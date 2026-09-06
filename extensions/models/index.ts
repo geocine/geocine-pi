@@ -9,6 +9,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../../lib/config.ts";
+import { richSelect, type SelectItem } from "../../lib/rich-select.ts";
 import { applyAliasesToPayload, removeToolsFromPayload, restoreCanonicalToolCalls } from "./aliases.ts";
 import { grokHarness } from "./grok.ts";
 import { openaiHarness } from "./openai.ts";
@@ -52,25 +53,44 @@ export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 		handler: async (rawArgs, ctx) => {
 			const input = String(rawArgs ?? "").trim();
 
-			// No args: show the registry and what each harness customizes.
+			// No args: interactive registry panel. Selecting a harness opens
+			// its detail view; action rows (from menuItems) route to onCommand.
 			if (!input) {
 				const model = ctx.model;
 				const label = model ? `${model.provider}/${model.id}` : "none";
 				const active = activeHarness(ctx);
-				const lines = [`Model: ${label} — harness: ${active ? active.id : "none"}`];
-				for (const harness of HARNESSES) {
-					const marker = harness === active ? "*" : " ";
-					if (harness.behaviors.length === 0) {
-						lines.push(`${marker} ${harness.id}: no custom behaviors yet (extensions/models/${harness.id}.ts)`);
+				for (;;) {
+					const items: SelectItem[] = HARNESSES.map((h) => ({
+						value: h.id,
+						label: `${h === active ? "* " : "  "}${h.id}`,
+						description:
+							h.behaviors.length === 0
+								? `declared slot — no custom behaviors yet (extensions/models/${h.id}.ts)`
+								: (h.summary ?? h.behaviors[0]),
+					}));
+					const picked = await richSelect(ctx, "Model harnesses (* = active)", items, {
+						header: [`model: ${label}`],
+					});
+					if (!picked) return;
+					const target = HARNESSES.find((h) => h.id === picked);
+					if (!target) return;
+					const actions = target.menuItems?.(ctx) ?? [];
+					if (actions.length === 0 || !target.onCommand) {
+						// Nothing to configure: show the behavior list and reopen the registry.
+						ctx.ui.notify(
+							[`${target.id}:`, ...target.behaviors.map((b) => `- ${b}`)].join("\n") ||
+								`${target.id}: no custom behaviors yet`,
+							"info",
+						);
 						continue;
 					}
-					lines.push(`${marker} ${harness.id}:${harness.commandHint ? ` (/harness ${harness.commandHint})` : ""}`);
-					for (const behavior of harness.behaviors) {
-						lines.push(`    - ${behavior}`);
-					}
+					const act = await richSelect(ctx, `${target.id}${target === active ? " (active)" : ""}`, actions, {
+						header: target.behaviors.map((b) => `- ${b}`),
+					});
+					if (act === undefined) continue; // escape: back to the registry
+					await target.onCommand(act, ctx, refreshStatus);
+					return;
 				}
-				ctx.ui.notify(lines.join("\n"), "info");
-				return;
 			}
 
 			// "/harness <id> <args>" targets a harness by name; otherwise the

@@ -274,6 +274,7 @@ export const grokHarness: ModelHarness = {
 	behaviors: [
 		"advertises the grok-build trained tool dialect (run_terminal_command, read_file target_file, search_replace, write file_path, list_dir, Claude-style grep, todo_write merge, web_fetch, web_search, ask_user_question)",
 	],
+	summary: "grok-build tool dialect (terminal, search_replace, Claude-style grep, web tools)",
 	matches: (ctx) => modelProvider(ctx) === "xai" || modelBlob(ctx).includes("grok"),
 	toolAliases: GROK_ALIASES,
 	// Shared with the qwen harness; hidden from every other model.

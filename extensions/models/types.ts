@@ -15,6 +15,7 @@ import type {
 	ToolCallEvent,
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
+import type { SelectItem } from "@earendil-works/pi-tui";
 import type { ToolAlias } from "./aliases.ts";
 
 // pi does not re-export MessageEndEventResult from the package root; this is
@@ -28,6 +29,13 @@ export interface ModelHarness {
 	id: string;
 	/** One line per custom behavior; /harness lists these. Empty = declared but no behaviors yet. */
 	behaviors: string[];
+	/** One-line row description for the /harness panel. Defaults to behaviors[0]. */
+	summary?: string;
+	/**
+	 * Action rows for the /harness detail panel. A picked item's `value` is
+	 * passed verbatim to onCommand, so every row must be a valid command arg.
+	 */
+	menuItems?(ctx: ExtensionContext): SelectItem[];
 	/** Claim the active model. Dispatch goes to the first matching harness in the registry. */
 	matches(ctx: ExtensionContext | undefined): boolean;
 	/**
