@@ -163,9 +163,9 @@ export interface ContextConfig {
 }
 
 export interface QwenConfig {
-	/** Persisted /qwen auto mode (survives restarts and /reload). */
+	/** Persisted Qwen auto thinking mode, set via /harness (survives restarts and /reload). */
 	auto?: boolean;
-	/** Persisted /qwen manual level (also the budget auto-mode borrows). */
+	/** Persisted Qwen manual thinking level, set via /harness (also the budget auto-mode borrows). */
 	level?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 

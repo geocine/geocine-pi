@@ -20,7 +20,7 @@ is logged as future fine-tuning data.
 | `worked-timer` | Codex-style run timing: live elapsed on the "Working..." line, "Worked for Xm Ys · turns · tool calls" summary per run (approval-dialog wait time excluded). | Automatic |
 | `geocine-menu` | One hub menu for everything above. | `/geocine` |
 | `bash-repair` | Strips terminal noise; prepends compact failure summaries (go/cargo/pytest/node). | Automatic |
-| `qwen-harness` | pi + llama.cpp pairing for Qwen: tool-call recovery, schema fixes, thinking budgets. | Automatic. `/qwen` |
+| `models/` | Per-model-family harness registry, one file per family. Qwen: tool-call recovery, llama.cpp schema fixes, thinking budgets. Grok and OpenAI: declared slots, no behaviors yet. | Automatic. `/harness` |
 | `baseten-limits` | Client-side RPM/TPM pacing + server `429 retry_after` handling for Baseten. | Automatic |
 
 ## Install

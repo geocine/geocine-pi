@@ -19,9 +19,9 @@
   <text x="134" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#aad94c">LOCAL MODEL</text>
   <text x="134" y="102" text-anchor="middle" font-size="11" fill="#bfbdb6">Qwen / llama.cpp, owns the loop</text>
   <line x1="40" y1="112" x2="228" y2="112" stroke="#1c212b" stroke-width="1"/>
-  <text x="134" y="130" text-anchor="middle" font-size="11" fill="#8a9199">qwen-harness: tool-call repair</text>
+  <text x="134" y="130" text-anchor="middle" font-size="11" fill="#8a9199">model harness: tool-call repair</text>
   <text x="134" y="147" text-anchor="middle" font-size="11" fill="#8a9199">bash-repair: failfmt + hygiene</text>
-  <text x="134" y="164" text-anchor="middle" font-size="11" fill="#8a9199">/qwen thinking control</text>
+  <text x="134" y="164" text-anchor="middle" font-size="11" fill="#8a9199">/harness thinking control</text>
   <text x="134" y="186" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">cheap, always on</text>
 
   <!-- CONTEXT KEEPER (teal) -->

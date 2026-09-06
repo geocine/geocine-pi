@@ -65,7 +65,7 @@
 	},
 
 	"qwen": {
-		"$comment": "Persisted /qwen state (auto thinking mode + budget level) — survives restarts and /reload.",
+		"$comment": "Persisted Qwen thinking state set via /harness (auto mode + budget level) — survives restarts and /reload.",
 		"auto": true,
 		"level": "medium"
 	},

@@ -98,8 +98,9 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
   warm KV cache).
 - `context.maxTokens`, `prunerThresholdChars`, `prunerHeadChars`,
   `prunerTailChars` — budgets.
-- `qwen.auto` / `qwen.level` — persisted `/qwen` thinking state (written
-  automatically by the command; survives restarts and `/reload`).
+- `qwen.auto` / `qwen.level` — persisted Qwen thinking state, set via
+  `/harness auto` and `/harness <level>` (written automatically by the
+  command; survives restarts and `/reload`).
 
 See [context.md](context.md) for the design and the research behind it.
 

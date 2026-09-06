@@ -36,7 +36,7 @@ Why these flags matter for this model:
   quantized KV cache so the 262k window fits in VRAM alongside `-ngl 99`
   (all layers on GPU).
 - **`--jinja`** — use the model's own chat template. Required for Qwen's
-  tool-call format; the `qwen-harness` extension patches the rough edges
+  tool-call format; the Qwen model harness (`extensions/models/qwen.ts`) patches the rough edges
   (tool-call repair, schema quirks, thinking control).
 - **`--no-models-autoload --models-max 1`** — serve exactly the one model,
   loaded on first request.
@@ -46,5 +46,5 @@ Sampling (temperature, top-p, etc.) can be set server-side
 defaults) or left to the client.
 
 With the server up, point pi at it via the `llama.cpp` provider and start a
-session; the `geocine-pi` extensions (qwen-harness, context-keeper,
+session; the `geocine-pi` extensions (the Qwen model harness, context-keeper,
 watchdog, consultants) do the rest.

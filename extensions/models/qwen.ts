@@ -1,4 +1,4 @@
-// qwen-harness: Pi + llama.cpp pairing for models whose id/name contains "qwen".
+// Qwen model harness: Pi + llama.cpp pairing for models whose id/name contains "qwen".
 // Runtime is Pi, not Qwen Code. Qwen Code is a reference because Coder-Next
 // trained on it as one of several scaffolds (also SWE-agent, OpenHands, Cline,
 // Claude Code, Terminus). Cross-scaffold transfer is weak, so we recover the
@@ -14,10 +14,10 @@
 // (qwen3_coder handler), common/json-schema-to-grammar.cpp.
 // llama-server --no-models-autoload --models-max 1 --host 127.0.0.1 --port 8080 -np 1 -ngl 99 -c 262144 -fa on --cache-type-k q4_0 --cache-type-v q4_0 --jinja
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig, updateGlobalConfig } from "../lib/config.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { loadConfig, updateGlobalConfig } from "../../lib/config.ts";
+import { type ModelHarness, modelBlob } from "./types.ts";
 
-const STATUS_ID = "qwen-harness";
 const XML_CALL_ID_PREFIX = "qwen-xml-";
 
 const TOOL_NAME_ALIASES: Record<string, string> = {
@@ -37,11 +37,6 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
 const PATH_KEYS = ["file_path", "target_file", "target_directory", "dir_path", "directory"];
 
 type JsonObject = Record<string, unknown>;
-
-function modelBlob(ctx: ExtensionContext | undefined): string {
-	const model = ctx?.model as { id?: unknown; name?: unknown; provider?: unknown } | undefined;
-	return `${model?.id ?? ""} ${model?.name ?? ""}`.toLowerCase();
-}
 
 function isQwenModel(ctx: ExtensionContext | undefined): boolean {
 	return modelBlob(ctx).includes("qwen");
@@ -536,11 +531,11 @@ const THINK_BUDGET_CUTOFF =
 	"\nConsidering the limited time by the user, I have to give the solution based on the thinking directly now.\n";
 
 // Auto mode: decide thinking per request from conversation state instead of
-// the fixed Pi level. Enabled via /qwen auto, cleared by /qwen <level>.
+// the fixed Pi level. Enabled via /harness auto, cleared by /harness <level>.
 let autoThinking = false;
 
 // Extension-managed thinking level. Pi clamps its own level to "off" for
-// llama.cpp models (provider reports reasoning:false), so /qwen <level>
+// llama.cpp models (provider reports reasoning:false), so /harness <level>
 // stores the level here instead of going through pi.setThinkingLevel().
 type QwenLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
 const QWEN_LEVELS: QwenLevel[] = ["off", "low", "medium", "high", "xhigh", "max"];
@@ -646,12 +641,7 @@ function patchThinking(payload: JsonObject, ctx: ExtensionContext): JsonObject {
 	return next;
 }
 
-function setStatus(ctx: ExtensionContext, active: boolean): void {
-	if (!ctx.ui?.setStatus) return;
-	if (!active) {
-		ctx.ui.setStatus(STATUS_ID, undefined);
-		return;
-	}
+function statusText(ctx: ExtensionContext): string {
 	const mode = isQwenCoder(ctx)
 		? "focus"
 		: autoThinking
@@ -659,102 +649,89 @@ function setStatus(ctx: ExtensionContext, active: boolean): void {
 			: manualLevel === "off"
 				? "focus"
 				: `think:${manualLevel}`;
-	ctx.ui.setStatus(STATUS_ID, `qwen ${mode}`);
+	return `qwen ${mode}`;
 }
 
-export default function qwenHarness(pi: ExtensionAPI) {
-	let lastNotifyKey = "";
+let lastNotifyKey = "";
 
-	pi.registerCommand("qwen", {
-		description: "Qwen thinking: /qwen off|low|medium|high|xhigh|max|auto (no arg: status)",
-		handler: async (args, ctx) => {
-			const arg = String(args ?? "").trim().toLowerCase();
-			if (arg === "auto") {
-				autoThinking = !autoThinking;
-				persistQwenState();
-				setStatus(ctx, isQwenModel(ctx));
-				ctx.ui.notify(
-					autoThinking
-						? `Thinking auto ON: think on user turns and tool errors (budget ${autoThinkBudget()}), focus during tool loops. Set budget via /qwen <level>, toggle off with /qwen auto.`
-						: `Thinking auto OFF: back to level "${manualLevel}"`,
-					"info",
-				);
-				return;
-			}
-			if (QWEN_LEVELS.includes(arg as QwenLevel)) {
-				manualLevel = arg as QwenLevel;
-				// "off" exits auto entirely; other levels keep auto on and
-				// just set the budget its thinking turns use.
-				if (manualLevel === "off") autoThinking = false;
-				persistQwenState();
-				setStatus(ctx, isQwenModel(ctx));
-				const budget = LEVEL_BUDGETS[manualLevel];
-				const suffix = autoThinking ? " (auto stays on, budget applied to its thinking turns)" : "";
-				ctx.ui.notify(
-					manualLevel === "off"
-						? "Qwen thinking off (focus)"
-						: `Qwen thinking ${manualLevel}${budget !== undefined ? `, budget ${budget} tokens` : ", no budget cap"}${suffix}`,
-					"info",
-				);
-				return;
-			}
-			if (arg) {
-				ctx.ui.notify(`Unknown option "${arg}" — use ${QWEN_LEVELS.join(", ")}, auto`, "error");
-				return;
-			}
-			const model = ctx.model;
-			const label = model ? `${model.provider}/${model.id}` : "none";
-			const budget = LEVEL_BUDGETS[manualLevel];
-			const mode = isQwenCoder(ctx)
-				? "coder: thinking forced off"
-				: autoThinking
-					? "auto: thinking per request"
-					: manualLevel === "off"
-						? "focus, thinking off"
-						: `thinking ${manualLevel}${budget !== undefined ? `, budget ${budget}` : ", no cap"}`;
+export const qwenHarness: ModelHarness = {
+	id: "qwen",
+	behaviors: [
+		"tool-call repair: name aliases, arg remapping, XML tool-call recovery (any provider)",
+		"llama.cpp: relaxes tool schemas that crash the grammar converter",
+		"llama.cpp: thinking control with budgets + Qwen3 sampling defaults (/harness <level>|auto)",
+	],
+	commandHint: "off|low|medium|high|xhigh|max|auto",
+	matches: isQwenModel,
+	status: statusText,
+
+	onSessionStart() {
+		hydrateQwenState();
+	},
+
+	async onCommand(args, ctx, refreshStatus) {
+		const arg = args.trim().toLowerCase();
+		if (arg === "auto") {
+			autoThinking = !autoThinking;
+			persistQwenState();
+			refreshStatus(ctx);
 			ctx.ui.notify(
-				isQwenModel(ctx)
-					? `Qwen harness ON for ${label} (${mode})`
-					: `Qwen harness idle (model name does not contain "qwen"): ${label}`,
+				autoThinking
+					? `Thinking auto ON: think on user turns and tool errors (budget ${autoThinkBudget()}), focus during tool loops. Set budget via /harness <level>, toggle off with /harness auto.`
+					: `Thinking auto OFF: back to level "${manualLevel}"`,
 				"info",
 			);
-		},
-	});
+			return;
+		}
+		if (QWEN_LEVELS.includes(arg as QwenLevel)) {
+			manualLevel = arg as QwenLevel;
+			// "off" exits auto entirely; other levels keep auto on and
+			// just set the budget its thinking turns use.
+			if (manualLevel === "off") autoThinking = false;
+			persistQwenState();
+			refreshStatus(ctx);
+			const budget = LEVEL_BUDGETS[manualLevel];
+			const suffix = autoThinking ? " (auto stays on, budget applied to its thinking turns)" : "";
+			ctx.ui.notify(
+				manualLevel === "off"
+					? "Qwen thinking off (focus)"
+					: `Qwen thinking ${manualLevel}${budget !== undefined ? `, budget ${budget} tokens` : ", no budget cap"}${suffix}`,
+				"info",
+			);
+			return;
+		}
+		if (arg) {
+			ctx.ui.notify(`Unknown option "${arg}" — use ${QWEN_LEVELS.join(", ")}, auto`, "error");
+			return;
+		}
+		const model = ctx.model;
+		const label = model ? `${model.provider}/${model.id}` : "none";
+		const budget = LEVEL_BUDGETS[manualLevel];
+		const mode = isQwenCoder(ctx)
+			? "coder: thinking forced off"
+			: autoThinking
+				? "auto: thinking per request"
+				: manualLevel === "off"
+					? "focus, thinking off"
+					: `thinking ${manualLevel}${budget !== undefined ? `, budget ${budget}` : ", no cap"}`;
+		ctx.ui.notify(
+			isQwenModel(ctx)
+				? `Qwen harness ON for ${label} (${mode})`
+				: `Qwen harness idle (model name does not contain "qwen"): ${label}`,
+			"info",
+		);
+	},
 
-	pi.on("session_start", async (_event, ctx) => {
-		hydrateQwenState();
-		setStatus(ctx, isQwenModel(ctx));
-	});
-
-	pi.on("model_select", async (_event, ctx) => {
-		setStatus(ctx, isQwenModel(ctx));
-	});
-
-	pi.on("thinking_level_select", async (_event, ctx) => {
-		// Note: auto mode is deliberately NOT cleared here. Pi's built-in
-		// llama.cpp provider registers models with reasoning:false, so Pi
-		// clamps the level to "off" (firing this event) on every switch to a
-		// llama.cpp model — those events are clamps, not user intent, and
-		// /thinking cannot control llama.cpp Qwen anyway. /qwen auto is the
-		// only toggle.
-		setStatus(ctx, isQwenModel(ctx));
-	});
-
-	pi.on("session_shutdown", async (_event, ctx) => {
-		setStatus(ctx, false);
-	});
-
-	pi.on("before_provider_request", (event, ctx) => {
+	beforeProviderRequest(event, ctx) {
 		// Payload patches use llama.cpp server fields (chat_template_kwargs,
 		// reasoning_budget_*); hosted providers get the untouched payload.
-		if (!isQwenModel(ctx) || !isLlamaCpp(ctx)) return;
+		if (!isLlamaCpp(ctx)) return;
 		const payload = asObject(event.payload);
 		if (!payload) return;
 		return patchThinking(patchLlamaTools(payload), ctx);
-	});
+	},
 
-	pi.on("message_end", async (event, ctx) => {
-		if (!isQwenModel(ctx)) return;
+	async onMessageEnd(event, ctx) {
 		const message = event.message as {
 			role?: string;
 			stopReason?: string;
@@ -822,14 +799,23 @@ export default function qwenHarness(pi: ExtensionAPI) {
 
 		if (!changed) return;
 		return { message: { ...message, content: remapped } as typeof event.message };
-	});
+	},
 
-	pi.on("tool_call", async (event, ctx) => {
-		if (!isQwenModel(ctx)) return;
+	async onToolCall(event, _ctx) {
 		const input = event.input as JsonObject | undefined;
 		if (!input) return;
 		const mapped = remapArgs(canonicalToolName(event.toolName), input);
 		for (const key of Object.keys(input)) delete input[key];
 		Object.assign(input, mapped);
-	});
-}
+		return undefined;
+	},
+};
+
+// Note on the removed session events: index.ts owns session_start /
+// model_select / thinking_level_select / session_shutdown wiring and calls
+// refreshStatus generically. Auto mode is deliberately NOT cleared on
+// thinking_level_select: Pi's built-in llama.cpp provider registers models
+// with reasoning:false, so Pi clamps the level to "off" (firing that event)
+// on every switch to a llama.cpp model — those events are clamps, not user
+// intent, and /thinking cannot control llama.cpp Qwen anyway. /harness auto
+// is the only toggle.

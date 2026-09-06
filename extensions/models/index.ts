@@ -1,0 +1,109 @@
+// Model harness dispatcher: the single pi extension for all per-model-family
+// custom behavior. Each family lives in its own file next to this one and
+// exports a ModelHarness (see types.ts); this file owns the pi event wiring
+// and routes every hook to the first harness whose matches() claims the
+// active model. `/harness` shows the registry and what each harness does.
+//
+// To customize a new model family: add <family>.ts exporting a ModelHarness,
+// then append it to HARNESSES below. Never call pi.on() from harness files.
+
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { grokHarness } from "./grok.ts";
+import { openaiHarness } from "./openai.ts";
+import { qwenHarness } from "./qwen.ts";
+import type { ModelHarness } from "./types.ts";
+
+const HARNESSES: ModelHarness[] = [qwenHarness, grokHarness, openaiHarness];
+
+const STATUS_ID = "model-harness";
+
+function activeHarness(ctx: ExtensionContext | undefined): ModelHarness | undefined {
+	return HARNESSES.find((h) => h.matches(ctx));
+}
+
+export default function modelHarnessDispatcher(pi: ExtensionAPI) {
+	function refreshStatus(ctx: ExtensionContext): void {
+		if (!ctx.ui?.setStatus) return;
+		const harness = activeHarness(ctx);
+		// A harness with no behaviors is a declared slot, not active machinery;
+		// keep the footer quiet for it.
+		if (!harness || harness.behaviors.length === 0) {
+			ctx.ui.setStatus(STATUS_ID, undefined);
+			return;
+		}
+		ctx.ui.setStatus(STATUS_ID, harness.status?.(ctx) ?? harness.id);
+	}
+
+	pi.registerCommand("harness", {
+		description: "Model harnesses: no arg lists them; /harness [id] <args> routes to a harness (e.g. /harness auto)",
+		handler: async (rawArgs, ctx) => {
+			const input = String(rawArgs ?? "").trim();
+
+			// No args: show the registry and what each harness customizes.
+			if (!input) {
+				const model = ctx.model;
+				const label = model ? `${model.provider}/${model.id}` : "none";
+				const active = activeHarness(ctx);
+				const lines = [`Model: ${label} — harness: ${active ? active.id : "none"}`];
+				for (const harness of HARNESSES) {
+					const marker = harness === active ? "*" : " ";
+					if (harness.behaviors.length === 0) {
+						lines.push(`${marker} ${harness.id}: no custom behaviors yet (extensions/models/${harness.id}.ts)`);
+						continue;
+					}
+					lines.push(`${marker} ${harness.id}:${harness.commandHint ? ` (/harness ${harness.commandHint})` : ""}`);
+					for (const behavior of harness.behaviors) {
+						lines.push(`    - ${behavior}`);
+					}
+				}
+				ctx.ui.notify(lines.join("\n"), "info");
+				return;
+			}
+
+			// "/harness <id> <args>" targets a harness by name; otherwise the
+			// args go to the active harness.
+			const [first, ...rest] = input.split(/\s+/);
+			const named = HARNESSES.find((h) => h.id === first.toLowerCase());
+			const target = named ?? activeHarness(ctx);
+			const args = named ? rest.join(" ") : input;
+			if (!target) {
+				ctx.ui.notify("No harness matches the current model. /harness <id> <args> targets one by name.", "error");
+				return;
+			}
+			if (!target.onCommand) {
+				ctx.ui.notify(`Harness "${target.id}" takes no arguments (no custom behaviors yet).`, "error");
+				return;
+			}
+			await target.onCommand(args, ctx, refreshStatus);
+		},
+	});
+
+	pi.on("session_start", async (_event, ctx) => {
+		for (const harness of HARNESSES) harness.onSessionStart?.(ctx);
+		refreshStatus(ctx);
+	});
+
+	pi.on("model_select", async (_event, ctx) => {
+		refreshStatus(ctx);
+	});
+
+	pi.on("thinking_level_select", async (_event, ctx) => {
+		refreshStatus(ctx);
+	});
+
+	pi.on("session_shutdown", async (_event, ctx) => {
+		ctx.ui?.setStatus?.(STATUS_ID, undefined);
+	});
+
+	pi.on("before_provider_request", (event, ctx) => {
+		return activeHarness(ctx)?.beforeProviderRequest?.(event, ctx);
+	});
+
+	pi.on("message_end", async (event, ctx) => {
+		return activeHarness(ctx)?.onMessageEnd?.(event, ctx);
+	});
+
+	pi.on("tool_call", async (event, ctx) => {
+		return activeHarness(ctx)?.onToolCall?.(event, ctx);
+	});
+}
