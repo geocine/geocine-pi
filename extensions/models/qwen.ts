@@ -16,6 +16,7 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, updateGlobalConfig } from "../../lib/config.ts";
+import { msToSeconds, rekey, secondsToMs, type ToolAlias } from "./aliases.ts";
 import { type ModelHarness, modelBlob } from "./types.ts";
 
 const XML_CALL_ID_PREFIX = "qwen-xml-";
@@ -654,14 +655,290 @@ function statusText(ctx: ExtensionContext): string {
 
 let lastNotifyKey = "";
 
+// Trained tool dialect, verified against D:\PL\qwen-code (tool-names.ts +
+// per-tool schemas): read_file/write_file/edit/run_shell_command/grep_search/
+// glob/list_directory. Advertising these names (with trained param spellings)
+// removes the RL mismatch that XML recovery otherwise repairs after the fact.
+// remapArgs still catches legacy spellings (replace, search_file_content).
+const str = (description: string) => ({ type: "string", description });
+const int = (description: string) => ({ type: "integer", description });
+
+const QWEN_ALIASES: ToolAlias[] = [
+	{
+		canonical: "read",
+		advertised: "read_file",
+		parameters: {
+			type: "object",
+			properties: {
+				file_path: str("Path to the file to read"),
+				offset: int("Line number to start reading from"),
+				limit: int("Maximum number of lines to read"),
+			},
+			required: ["file_path"],
+		},
+		toAdvertisedArgs: (a) => rekey(a, { path: "file_path" }),
+		toCanonicalArgs: (a) => rekey(a, { file_path: "path" }, ["path", "offset", "limit"]),
+	},
+	{
+		canonical: "write",
+		advertised: "write_file",
+		parameters: {
+			type: "object",
+			properties: {
+				file_path: str("Path to the file to write"),
+				content: str("Content to write to the file"),
+			},
+			required: ["file_path", "content"],
+		},
+		toAdvertisedArgs: (a) => rekey(a, { path: "file_path" }),
+		toCanonicalArgs: (a) => rekey(a, { file_path: "path" }, ["path", "content"]),
+	},
+	{
+		// Same name, trained schema: qwen-code's edit takes old_string/new_string
+		// (+ replace_all), not pi's edits array.
+		canonical: "edit",
+		advertised: "edit",
+		parameters: {
+			type: "object",
+			properties: {
+				file_path: str("Path to the file to modify"),
+				old_string: str("Exact literal text to replace (include enough context to be unique)"),
+				new_string: str("Exact replacement text"),
+				replace_all: { type: "boolean", description: "Replace all occurrences (default false)" },
+			},
+			required: ["file_path", "old_string", "new_string"],
+		},
+		toAdvertisedArgs: (a) => {
+			const edits = Array.isArray(a.edits) ? (a.edits as Array<Record<string, unknown>>) : [];
+			if (edits.length !== 1) return a; // multi-edit has no trained single-pair form
+			return {
+				file_path: a.path ?? a.file_path,
+				old_string: edits[0].oldText,
+				new_string: edits[0].newText,
+			};
+		},
+		toCanonicalArgs: (a) => {
+			if (a.old_string === undefined && a.new_string === undefined) return a; // already canonical
+			return {
+				path: a.file_path ?? a.path,
+				edits: [{ oldText: a.old_string ?? "", newText: a.new_string ?? "" }],
+			};
+		},
+	},
+	{
+		canonical: "bash",
+		advertised: "run_shell_command",
+		parameters: {
+			type: "object",
+			properties: {
+				command: str("Shell command to execute"),
+				timeout: { type: "number", description: "Timeout in milliseconds" },
+				directory: str("Working directory for the command"),
+				description: str("Brief description of what the command does"),
+			},
+			required: ["command"],
+		},
+		// remapArgs("bash", ...) already folds directory into a cd prefix and
+		// drops description; route through it for one source of truth.
+		// Trained dialect timeout is milliseconds; pi bash takes seconds.
+		toCanonicalArgs: (a) => {
+			const mapped = remapArgs("bash", { ...a, working_directory: a.directory ?? a.working_directory });
+			const seconds = msToSeconds(mapped.timeout);
+			if (seconds !== undefined) mapped.timeout = seconds;
+			else delete mapped.timeout;
+			return mapped;
+		},
+		toAdvertisedArgs: (a) => {
+			const out = rekey(a, {}, ["command"]);
+			const ms = secondsToMs(a.timeout);
+			if (ms !== undefined) out.timeout = ms;
+			return out;
+		},
+	},
+	{
+		canonical: "grep",
+		advertised: "grep_search",
+		parameters: {
+			type: "object",
+			properties: {
+				pattern: str("Regular expression to search for"),
+				path: str("File or directory to search (default: current directory)"),
+				glob: str("Glob to filter which files are searched"),
+				limit: int("Maximum number of matching lines"),
+			},
+			required: ["pattern"],
+		},
+		toCanonicalArgs: (a) => remapArgs("grep", a),
+		toAdvertisedArgs: (a) => rekey(a, {}, ["pattern", "path", "glob", "limit"]),
+	},
+	{
+		canonical: "find",
+		advertised: "glob",
+		parameters: {
+			type: "object",
+			properties: {
+				pattern: str("Glob pattern to match files against"),
+				path: str("Directory to search (default: current directory)"),
+			},
+			required: ["pattern"],
+		},
+		toCanonicalArgs: (a) => remapArgs("find", a),
+		toAdvertisedArgs: (a) => rekey(a, {}, ["pattern", "path"]),
+	},
+	{
+		canonical: "ls",
+		advertised: "list_directory",
+		parameters: {
+			type: "object",
+			properties: {
+				path: str("Directory to list"),
+			},
+			required: ["path"],
+		},
+		toCanonicalArgs: (a) => remapArgs("ls", a),
+		toAdvertisedArgs: (a) => rekey(a, {}, ["path", "limit"]),
+	},
+	{
+		// qwen-code todo_write: full-replacement plan list, three statuses.
+		canonical: "todo",
+		advertised: "todo_write",
+		parameters: {
+			type: "object",
+			properties: {
+				todos: {
+					type: "array",
+					description: "The complete task list (replaces the previous list)",
+					items: {
+						type: "object",
+						properties: {
+							id: str("Unique identifier for the task"),
+							content: str("The task description"),
+							status: {
+								type: "string",
+								enum: ["pending", "in_progress", "completed"],
+								description: "Current task state",
+							},
+						},
+						required: ["id", "content", "status"],
+					},
+				},
+			},
+			required: ["todos"],
+		},
+		toCanonicalArgs: (a) => rekey(a, {}, ["todos"]),
+		toAdvertisedArgs: (a) => {
+			const items = Array.isArray(a.todos) ? (a.todos as Array<Record<string, unknown>>) : [];
+			return {
+				todos: items.map((t, i) => ({
+					id: t.id ?? String(i + 1),
+					content: t.content ?? "",
+					status: t.status === "cancelled" ? "completed" : (t.status ?? "pending"),
+				})),
+			};
+		},
+	},
+	{
+		// Same name, qwen-code schema: prompt is required there.
+		canonical: "web_fetch",
+		advertised: "web_fetch",
+		parameters: {
+			type: "object",
+			properties: {
+				url: str("The URL to fetch content from"),
+				prompt: str("What information to extract from the page"),
+			},
+			required: ["url", "prompt"],
+		},
+		toCanonicalArgs: (a) => rekey(a, {}, ["url", "prompt"]),
+		toAdvertisedArgs: (a) => ({ url: a.url, prompt: a.prompt ?? "Extract the relevant content" }),
+	},
+	{
+		// Same name, qwen-code schema: query only.
+		canonical: "web_search",
+		advertised: "web_search",
+		parameters: {
+			type: "object",
+			properties: {
+				query: str("The search query"),
+			},
+			required: ["query"],
+		},
+		toCanonicalArgs: (a) => rekey(a, {}, ["query"]),
+		toAdvertisedArgs: (a) => rekey(a, {}, ["query"]),
+	},
+	{
+		// qwen-code ask_user_question: multi-question envelope over pi's
+		// single-question ask_user. Only the first question is asked.
+		canonical: "ask_user",
+		advertised: "ask_user_question",
+		parameters: {
+			type: "object",
+			properties: {
+				questions: {
+					type: "array",
+					description: "Questions for the user (ask one per call)",
+					items: {
+						type: "object",
+						properties: {
+							question: str("The question to ask"),
+							header: str("Short 3-5 word label for the question"),
+							options: {
+								type: "array",
+								description: "Answer choices",
+								items: {
+									type: "object",
+									properties: {
+										label: str("The choice shown to the user"),
+										description: str("One-line explanation of the choice"),
+									},
+									required: ["label", "description"],
+								},
+							},
+						},
+						required: ["question", "header", "options"],
+					},
+				},
+			},
+			required: ["questions"],
+		},
+		toCanonicalArgs: (a) => {
+			const questions = Array.isArray(a.questions) ? (a.questions as Array<Record<string, unknown>>) : [];
+			const first = questions[0] ?? {};
+			const options = Array.isArray(first.options)
+				? (first.options as Array<Record<string, unknown>>).map((o) => String(o.label ?? "")).filter(Boolean)
+				: [];
+			const out: JsonObject = { question: first.question ?? "" };
+			if (options.length > 0) out.options = options;
+			return out;
+		},
+		toAdvertisedArgs: (a) => ({
+			questions: [
+				{
+					question: a.question ?? "",
+					header: "Question",
+					options: (Array.isArray(a.options) ? (a.options as unknown[]) : []).map((label) => ({
+						label: String(label),
+						description: "",
+					})),
+				},
+			],
+		}),
+	},
+];
+
 export const qwenHarness: ModelHarness = {
 	id: "qwen",
 	behaviors: [
+		"advertises the qwen-code trained tool dialect (read_file, write_file, edit old/new_string, run_shell_command, grep_search, glob, list_directory, todo_write, web_fetch, web_search, ask_user_question)",
 		"tool-call repair: name aliases, arg remapping, XML tool-call recovery (any provider)",
 		"llama.cpp: relaxes tool schemas that crash the grammar converter",
 		"llama.cpp: thinking control with budgets + Qwen3 sampling defaults (/harness <level>|auto)",
 	],
 	commandHint: "off|low|medium|high|xhigh|max|auto",
+	toolAliases: QWEN_ALIASES,
+	// Client web tools are trained in qwen-code and grok-build only; codex
+	// models get hosted web access, so these stay hidden elsewhere.
+	ownedTools: ["web_fetch", "web_search"],
 	matches: isQwenModel,
 	status: statusText,
 

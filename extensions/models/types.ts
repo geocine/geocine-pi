@@ -9,11 +9,13 @@
 
 import type {
 	BeforeProviderRequestEvent,
+	ExtensionAPI,
 	ExtensionContext,
 	MessageEndEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
 } from "@earendil-works/pi-coding-agent";
+import type { ToolAlias } from "./aliases.ts";
 
 // pi does not re-export MessageEndEventResult from the package root; this is
 // the same shape (replace the finalized message, keeping the original role).
@@ -28,6 +30,24 @@ export interface ModelHarness {
 	behaviors: string[];
 	/** Claim the active model. Dispatch goes to the first matching harness in the registry. */
 	matches(ctx: ExtensionContext | undefined): boolean;
+	/**
+	 * Transparent tool aliases: advertise the trained tool dialect on the wire
+	 * while pi stays canonical. Applied generically by index.ts (outbound
+	 * rename in before_provider_request, inbound restore in message_end).
+	 * Disable globally with `"harness": { "aliases": false }` in geocine.json.
+	 */
+	toolAliases?: ToolAlias[];
+	/**
+	 * Register model-specific tools this harness owns (e.g. apply_patch for
+	 * OpenAI). Called once at extension load; pi executes them like any tool.
+	 */
+	registerTools?(pi: ExtensionAPI): void;
+	/**
+	 * Names of registered tools that should only be ADVERTISED while this
+	 * harness is active. index.ts strips them from other models' requests so
+	 * one model's trained tools do not pollute another's tool list.
+	 */
+	ownedTools?: string[];
 	/** Footer status text while active. Omit to show the harness id. */
 	status?(ctx: ExtensionContext): string;
 	/** One-line usage hint for /harness args this harness accepts (shown in the registry listing). */

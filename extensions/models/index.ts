@@ -8,10 +8,14 @@
 // then append it to HARNESSES below. Never call pi.on() from harness files.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { loadConfig } from "../../lib/config.ts";
+import { applyAliasesToPayload, removeToolsFromPayload, restoreCanonicalToolCalls } from "./aliases.ts";
 import { grokHarness } from "./grok.ts";
 import { openaiHarness } from "./openai.ts";
 import { qwenHarness } from "./qwen.ts";
+import { registerTodoTool, rehydrateTodos } from "./todo.ts";
 import type { ModelHarness } from "./types.ts";
+import { registerWebTools } from "./web.ts";
 
 const HARNESSES: ModelHarness[] = [qwenHarness, grokHarness, openaiHarness];
 
@@ -22,6 +26,15 @@ function activeHarness(ctx: ExtensionContext | undefined): ModelHarness | undefi
 }
 
 export default function modelHarnessDispatcher(pi: ExtensionAPI) {
+	for (const harness of HARNESSES) {
+		harness.registerTools?.(pi);
+	}
+	// Shared trained-tool equivalents: every scaffold has a plan tool, and
+	// qwen-code + grok-build train client web tools (codex's are hosted, so
+	// web tools are in qwen/grok ownedTools and hidden from OpenAI models).
+	registerTodoTool(pi);
+	registerWebTools(pi);
+
 	function refreshStatus(ctx: ExtensionContext): void {
 		if (!ctx.ui?.setStatus) return;
 		const harness = activeHarness(ctx);
@@ -80,6 +93,7 @@ export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		for (const harness of HARNESSES) harness.onSessionStart?.(ctx);
+		rehydrateTodos(ctx);
 		refreshStatus(ctx);
 	});
 
@@ -95,12 +109,49 @@ export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 		ctx.ui?.setStatus?.(STATUS_ID, undefined);
 	});
 
+	function aliasesFor(harness: ModelHarness | undefined) {
+		if (!harness?.toolAliases?.length) return undefined;
+		if (loadConfig().harness?.aliases === false) return undefined;
+		return harness.toolAliases;
+	}
+
+	// Tools owned by some harness are advertised only while that harness is
+	// active; every other model gets them stripped from the request.
+	function foreignOwnedTools(active: ModelHarness | undefined): Set<string> {
+		const names = new Set<string>();
+		for (const harness of HARNESSES) {
+			if (harness === active) continue;
+			for (const name of harness.ownedTools ?? []) {
+				if (!active?.ownedTools?.includes(name)) names.add(name);
+			}
+		}
+		return names;
+	}
+
 	pi.on("before_provider_request", (event, ctx) => {
-		return activeHarness(ctx)?.beforeProviderRequest?.(event, ctx);
+		const harness = activeHarness(ctx);
+		let payload = event.payload;
+		const stripped = removeToolsFromPayload(payload, foreignOwnedTools(harness));
+		if (stripped) payload = stripped;
+		if (!harness) return stripped;
+		// Outbound aliasing next, so harness payload patches (e.g. qwen's
+		// llama.cpp schema relaxing) operate on the advertised schemas.
+		const aliases = aliasesFor(harness);
+		const aliased = aliases ? applyAliasesToPayload(payload, aliases) : undefined;
+		if (aliased) payload = aliased;
+		const nextEvent = payload !== event.payload ? { ...event, payload } : event;
+		return harness.beforeProviderRequest?.(nextEvent, ctx) ?? (payload !== event.payload ? payload : undefined);
 	});
 
 	pi.on("message_end", async (event, ctx) => {
-		return activeHarness(ctx)?.onMessageEnd?.(event, ctx);
+		const harness = activeHarness(ctx);
+		if (!harness) return;
+		// Inbound restore first, so harness repair logic sees canonical names.
+		const aliases = aliasesFor(harness);
+		const restored = aliases ? restoreCanonicalToolCalls(event.message, aliases) : undefined;
+		const nextEvent = restored ? { ...event, message: restored } : event;
+		const result = await harness.onMessageEnd?.(nextEvent, ctx);
+		return result ?? (restored ? { message: restored } : undefined);
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
