@@ -98,6 +98,12 @@
 		"maxSearchMatches": 40
 	},
 
+	"web": {
+		"$comment": "Provider behind web_fetch/web_search. 'auto' = first available (tinyfish when its key is present, else builtin DuckDuckGo scrape; a keyed provider that errors mid-call falls back to builtin for that call). Pin 'tinyfish' or 'builtin' to force one — pinned providers surface their errors. tinyfishApiKey: literal key or '$VAR_NAME' env reference; TINYFISH_API_KEY env var also works.",
+		"provider": "auto",
+		"$comment_key": "\"tinyfishApiKey\": \"$TINYFISH_API_KEY\""
+	},
+
 	"docker": {
 		"image": "geocine-consult"
 	},

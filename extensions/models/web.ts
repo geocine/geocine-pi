@@ -4,86 +4,40 @@
 // Codex models get web access as a hosted provider tool, so these are hidden
 // from OpenAI models via ownedTools.
 //
-// web_fetch: fetch the URL, strip HTML to readable text, cap the size. The
-// qwen-code original runs the prompt over the content model-side; here the
-// content is returned directly and the model applies its own prompt, which
-// keeps the tool deterministic and provider-free.
-//
-// web_search: DuckDuckGo HTML endpoint (no API key). allowed_domains maps to
-// site: operators like the grok-build original.
+// The tool schemas here are the trained dialects and never change. What
+// serves them is a pluggable provider (lib/web-providers/): "tinyfish"
+// (TinyFish search + server-rendered Markdown fetch, needs an API key) or
+// "builtin" (DuckDuckGo HTML scrape + plain fetch, zero config). `web.provider`
+// in geocine.json pins one; the default "auto" prefers the first provider
+// whose key is present and falls back to builtin — including at runtime,
+// when a keyed provider errors mid-call, so the model always gets an answer.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { loadConfig } from "../../lib/config.ts";
+import { fallbackProviderFor, resolveWebProvider, type WebProvider, type WebSearchResult } from "../../lib/web-providers/index.ts";
 
-const FETCH_TIMEOUT_MS = 20000;
 const MAX_CONTENT_CHARS = 50000;
 const MAX_RESULTS = 8;
 
-// DDG's html endpoint answers 202 (bot challenge) to non-browser UAs.
-const USER_AGENT =
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
-
-function decodeEntities(s: string): string {
-	return s
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&quot;/g, '"')
-		.replace(/&#x?\d+;/g, " ")
-		.replace(/&nbsp;/g, " ")
-		.replace(/&amp;/g, "&");
-}
-
-/** Crude but dependency-free HTML to readable text. */
-export function htmlToText(html: string): string {
-	const withoutBlocks = html
-		.replace(/<script[\s\S]*?<\/script>/gi, "")
-		.replace(/<style[\s\S]*?<\/style>/gi, "")
-		.replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
-		.replace(/<!--[\s\S]*?-->/g, "");
-	const withBreaks = withoutBlocks
-		.replace(/<(br|\/p|\/div|\/li|\/h[1-6]|\/tr)[^>]*>/gi, "\n")
-		.replace(/<li[^>]*>/gi, "- ");
-	return decodeEntities(withBreaks.replace(/<[^>]+>/g, ""))
-		.replace(/[ \t]+/g, " ")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
-}
-
-async function fetchText(url: string): Promise<{ contentType: string; body: string }> {
-	const response = await fetch(url, {
-		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-		headers: { "user-agent": USER_AGENT },
-		redirect: "follow",
-	});
-	if (!response.ok) throw new Error(`Fetch failed: HTTP ${response.status} for ${url}`);
-	const contentType = response.headers.get("content-type") ?? "";
-	return { contentType, body: await response.text() };
-}
-
-interface SearchResult {
-	title: string;
-	url: string;
-	snippet: string;
-}
-
-export function parseDuckDuckGo(html: string): SearchResult[] {
-	const results: SearchResult[] = [];
-	const linkPattern = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-	const snippetPattern = /<a[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-	const links = [...html.matchAll(linkPattern)];
-	const snippets = [...html.matchAll(snippetPattern)];
-	for (let i = 0; i < links.length && results.length < MAX_RESULTS; i++) {
-		let url = decodeEntities(links[i][1]);
-		// DDG wraps results in a redirect (//duckduckgo.com/l/?uddg=<encoded>).
-		const uddg = /[?&]uddg=([^&]+)/.exec(url);
-		if (uddg) url = decodeURIComponent(uddg[1]);
-		// Sponsored results decode to DDG/Bing ad click-trackers; skip them.
-		if (/duckduckgo\.com\/y\.js|bing\.com\/aclick|ad_provider=/.test(url)) continue;
-		const title = htmlToText(links[i][2]);
-		if (!title || !/^https?:/.test(url)) continue;
-		results.push({ title, url, snippet: htmlToText(snippets[i]?.[1] ?? "") });
+async function withFallback<T>(
+	run: (provider: WebProvider) => Promise<T>,
+): Promise<{ value: T; provider: WebProvider; fallbackNote?: string }> {
+	const cfg = loadConfig().web;
+	const provider = resolveWebProvider(cfg);
+	try {
+		return { value: await run(provider), provider };
+	} catch (err) {
+		const fallback = fallbackProviderFor(provider, cfg);
+		if (!fallback) throw err;
+		const message = err instanceof Error ? err.message : String(err);
+		if (/abort/i.test(message)) throw err; // user cancelled — don't retry
+		return {
+			value: await run(fallback),
+			provider: fallback,
+			fallbackNote: `[${provider.id} failed (${message}); answered by ${fallback.id}]`,
+		};
 	}
-	return results;
 }
 
 export function registerWebTools(pi: ExtensionAPI): void {
@@ -91,28 +45,30 @@ export function registerWebTools(pi: ExtensionAPI): void {
 		name: "web_fetch",
 		label: "web_fetch",
 		description:
-			"Fetch a URL and return its content as readable text (HTML is stripped). Use for documentation pages, articles, raw files, and APIs returning text or JSON.",
+			"Fetch a URL and return its content as readable text (HTML is stripped or rendered to Markdown). Use for documentation pages, articles, raw files, and APIs returning text or JSON.",
 		parameters: Type.Object({
 			url: Type.String({ description: "The absolute URL to fetch" }),
 			prompt: Type.Optional(
-				Type.String({ description: "What you are looking for in the page (echoed back as a focus reminder)" }),
+				Type.String({ description: "What you are looking for in the page (guides extraction where supported; echoed back as a focus reminder)" }),
 			),
 		}),
-		async execute(_toolCallId, params) {
-			const { contentType, body } = await fetchText(params.url);
-			const isHtml = contentType.includes("html") || /^\s*<(!doctype|html)/i.test(body);
-			let text = isHtml ? htmlToText(body) : body;
+		async execute(_toolCallId, params, signal) {
+			const { value, provider, fallbackNote } = await withFallback((p) =>
+				p.fetch(params.url, { prompt: params.prompt, signal }),
+			);
+			let text = value.content;
 			let truncated = false;
 			if (text.length > MAX_CONTENT_CHARS) {
 				text = text.slice(0, MAX_CONTENT_CHARS);
 				truncated = true;
 			}
-			const parts = [`Content of ${params.url}:`, "", text];
+			const parts = [`Content of ${params.url}${value.title ? ` (${value.title})` : ""}:`, "", text];
 			if (truncated) parts.push("", `[truncated at ${MAX_CONTENT_CHARS} chars]`);
 			if (params.prompt) parts.push("", `Focus: ${params.prompt}`);
+			if (fallbackNote) parts.unshift(fallbackNote, "");
 			return {
 				content: [{ type: "text", text: parts.join("\n") }],
-				details: { url: params.url, contentType, truncated },
+				details: { url: params.url, provider: provider.id, contentType: value.contentType, truncated },
 			};
 		},
 	});
@@ -128,25 +84,26 @@ export function registerWebTools(pi: ExtensionAPI): void {
 				Type.Array(Type.String(), { description: "Restrict results to these domains" }),
 			),
 		}),
-		async execute(_toolCallId, params) {
-			let query = params.query;
+		async execute(_toolCallId, params, signal) {
 			const domains = (params.allowed_domains ?? []).filter((d) => d.trim() !== "");
-			if (domains.length === 1) query += ` site:${domains[0]}`;
-			else if (domains.length > 1) query += ` (${domains.map((d) => `site:${d}`).join(" OR ")})`;
-			const { body } = await fetchText(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`);
-			const results = parseDuckDuckGo(body);
+			const { value: results, provider, fallbackNote } = await withFallback((p) =>
+				p.search(params.query, { domains, limit: MAX_RESULTS, signal }),
+			);
 			if (results.length === 0) {
+				const empty = `No results for: ${params.query}`;
 				return {
-					content: [{ type: "text", text: `No results for: ${query}` }],
-					details: { query, results },
+					content: [{ type: "text", text: fallbackNote ? `${fallbackNote}\n\n${empty}` : empty }],
+					details: { query: params.query, provider: provider.id, results },
 				};
 			}
 			const text = results
-				.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ""}`)
+				.map((r: WebSearchResult, i: number) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ""}`)
 				.join("\n");
+			const headline = `Search results for "${params.query}":`;
+			const parts = fallbackNote ? [fallbackNote, "", headline, text] : [headline, text];
 			return {
-				content: [{ type: "text", text: `Search results for "${query}":\n${text}` }],
-				details: { query, results },
+				content: [{ type: "text", text: parts.join("\n") }],
+				details: { query: params.query, provider: provider.id, results },
 			};
 		},
 	});

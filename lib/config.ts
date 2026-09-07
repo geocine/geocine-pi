@@ -177,6 +177,24 @@ export interface HarnessConfig {
 	aliases?: boolean;
 }
 
+export interface WebConfig {
+	/**
+	 * Which provider serves web_fetch / web_search:
+	 *  - "auto" (default): first available provider — tinyfish when its key
+	 *    is present, else builtin. A keyed provider that errors mid-call
+	 *    falls back to builtin for that call.
+	 *  - "tinyfish": TinyFish search + fetch APIs (pinned: errors surface).
+	 *  - "builtin": DuckDuckGo HTML scrape + plain fetch, no API key.
+	 */
+	provider?: string;
+	/**
+	 * TinyFish API key (https://agent.tinyfish.ai/api-keys). A literal key
+	 * or a "$VAR_NAME" environment reference. Falls back to the
+	 * TINYFISH_API_KEY environment variable.
+	 */
+	tinyfishApiKey?: string;
+}
+
 export interface PdfConfig {
 	/**
 	 * Max characters one read_pdf call may return. The tool fills whole
@@ -231,6 +249,7 @@ export interface GeocineConfig {
 	qwen?: QwenConfig;
 	harness?: HarnessConfig;
 	pdf?: PdfConfig;
+	web?: WebConfig;
 	/** Directory for decision logs. Default ~/.pi/agent/consult-log */
 	logDir?: string;
 }
@@ -263,6 +282,7 @@ export function loadConfig(cwd?: string): GeocineConfig {
 		qwen: { ...(global.qwen ?? {}), ...(project?.qwen ?? {}) },
 		harness: { ...(global.harness ?? {}), ...(project?.harness ?? {}) },
 		pdf: { ...(global.pdf ?? {}), ...(project?.pdf ?? {}) },
+		web: { ...(global.web ?? {}), ...(project?.web ?? {}) },
 		logDir: project?.logDir ?? global.logDir,
 	};
 	return merged;

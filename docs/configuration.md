@@ -164,6 +164,35 @@ core RL toolset resolves to something real:
 - `view_image` — codex's attach-image-by-path tool, mapped onto pi `read`
   for OpenAI models (codex models read text via `exec_command`, as trained).
 
+## Web providers
+
+- `web.provider` — what serves the canonical `web_fetch` / `web_search`
+  tools: `"auto"` (default), `"tinyfish"`, or `"builtin"`. The tool names
+  and schemas the models see never change; only the backend does.
+  - `tinyfish` — [TinyFish](https://tinyfish.ai) search + fetch APIs.
+    Native domain include/exclude filtering, and fetch renders the page
+    server-side to Markdown (much better than HTML stripping on JS-heavy
+    pages). Needs an API key.
+  - `builtin` — DuckDuckGo HTML scrape + plain fetch with dependency-free
+    HTML-to-text. No key, always available.
+  - `auto` picks the first available provider (tinyfish when its key is
+    present) and, if a keyed provider errors mid-call, retries that call
+    with builtin and says so in the result. A **pinned** provider's errors
+    surface instead — you asked for it, you should see it fail.
+- `web.tinyfishApiKey` — literal key or a `"$VAR_NAME"` environment
+  reference; the `TINYFISH_API_KEY` environment variable also works.
+  Keys: <https://agent.tinyfish.ai/api-keys>. API keys are redacted from
+  error messages before they can reach the transcript.
+
+Adding a provider later: drop a file in `lib/web-providers/` exporting a
+`WebProvider` (id, `available()`, `search()`, `fetch()`) and append it to
+`PROVIDERS` in `lib/web-providers/index.ts` — keyed providers go before
+`builtin` so auto prefers them the moment their key appears. Selection,
+fallback, budget caps, and the tool schemas need no changes.
+`scripts/smoke-web.mjs` exercises selection, pinning errors, and live
+builtin calls (`node --experimental-strip-types scripts/smoke-web.mjs`);
+with a TinyFish key in the environment it runs live through TinyFish.
+
 ## PDF reader
 
 - `pdf.maxChars` — output cap for one `read_pdf` call (default 24000).
