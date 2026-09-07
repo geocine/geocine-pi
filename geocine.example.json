@@ -92,6 +92,12 @@
 		"aliases": true
 	},
 
+	"pdf": {
+		"$comment": "read_pdf tool (pdf-reader extension, @firecrawl/pdf-inspector). maxChars caps one call's output — the tool fills whole pages, then names the omitted pages so the model fetches exactly what it needs next. maxSearchMatches caps `search` result lines.",
+		"maxChars": 24000,
+		"maxSearchMatches": 40
+	},
+
 	"docker": {
 		"image": "geocine-consult"
 	},

@@ -164,6 +164,24 @@ core RL toolset resolves to something real:
 - `view_image` — codex's attach-image-by-path tool, mapped onto pi `read`
   for OpenAI models (codex models read text via `exec_command`, as trained).
 
+## PDF reader
+
+- `pdf.maxChars` — output cap for one `read_pdf` call (default 24000).
+  The tool fills whole pages until the budget runs out, then names the
+  omitted pages so the model requests exactly what it needs next call
+  instead of flooding a local context with a 200-page document.
+- `pdf.maxSearchMatches` — matching lines returned by a `search` call
+  (default 40).
+
+Extraction is native ([@firecrawl/pdf-inspector](https://github.com/firecrawl/pdf-inspector),
+Rust via napi, ~10–50ms to classify, ~150ms to extract a text PDF; parsing
+runs on the libuv pool, not the event loop). Scanned/image pages carry no
+text layer and are flagged with their machine-readable reason instead of
+extracted — the OCR pipeline (external PDFium + ONNX Runtime libraries) is
+deliberately not wired in. `scripts/smoke-pdf.mjs` and
+`scripts/smoke-pdf-budget.mjs` exercise the tool end-to-end
+(`node --experimental-strip-types scripts/smoke-pdf.mjs`).
+
 ## Rescue capture
 
 - `rescue.enabled` — capture manual local-to-frontier switch episodes.

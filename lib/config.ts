@@ -177,6 +177,17 @@ export interface HarnessConfig {
 	aliases?: boolean;
 }
 
+export interface PdfConfig {
+	/**
+	 * Max characters one read_pdf call may return. The tool fills whole
+	 * pages until the budget runs out and names the omitted pages, so a
+	 * big PDF can never flood a local model's context. Default 24000.
+	 */
+	maxChars?: number;
+	/** Max matches returned by a read_pdf search. Default 40. */
+	maxSearchMatches?: number;
+}
+
 export interface ModeConfig {
 	/** One line shown in menus (e.g. "RE / sensitive content"). */
 	description?: string;
@@ -219,6 +230,7 @@ export interface GeocineConfig {
 	context?: ContextConfig;
 	qwen?: QwenConfig;
 	harness?: HarnessConfig;
+	pdf?: PdfConfig;
 	/** Directory for decision logs. Default ~/.pi/agent/consult-log */
 	logDir?: string;
 }
@@ -250,6 +262,7 @@ export function loadConfig(cwd?: string): GeocineConfig {
 		context: { ...(global.context ?? {}), ...(project?.context ?? {}) },
 		qwen: { ...(global.qwen ?? {}), ...(project?.qwen ?? {}) },
 		harness: { ...(global.harness ?? {}), ...(project?.harness ?? {}) },
+		pdf: { ...(global.pdf ?? {}), ...(project?.pdf ?? {}) },
 		logDir: project?.logDir ?? global.logDir,
 	};
 	return merged;
