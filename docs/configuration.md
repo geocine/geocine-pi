@@ -106,6 +106,13 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
 
 ## Context keeper
 
+- `context.providers` — which model providers get context-keeper machinery
+  at all (early/idle compaction, reminder, pruner, and the arc/checkpoint
+  compaction override). Default `["llama.cpp", "lmstudio", "ollama"]` —
+  genuinely local servers where prompt re-ingest is slow. Any other model
+  selected in the picker (cloud APIs, abliteration-ai, …) uses pi's
+  built-in compaction untouched; the `recall` and `note` tools stay
+  available everywhere.
 - `context.mode` — compaction style: `"arc"` (deterministic digest, no
   model call, default), `"checkpoint"` (LLM-written structured checkpoint),
   or `"off"` (pi default).
@@ -118,8 +125,9 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
   tokens of `compactAtTokens`, the model is told once to pin load-bearing
   facts before the cut. Default 8000; 0 disables.
 - `context.compactAtTokens` — compact early at this many tokens while a
-  local provider is active (pi's own threshold, contextWindow − reserve, is
-  minutes of prompt re-ingest too late on local hardware). Unset = off.
+  `context.providers` provider is active (pi's own threshold, contextWindow
+  − reserve, is minutes of prompt re-ingest too late on local hardware).
+  Unset = off.
 - `context.idleCompactMinutes` — also compact after N idle minutes once the
   context is past half the threshold. Unset = off.
 - `context.pruner` — ingestion-time trimming of oversized bash/powershell

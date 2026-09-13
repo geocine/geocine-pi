@@ -100,6 +100,16 @@ export interface RescueConfig {
 
 export interface ContextConfig {
 	/**
+	 * Providers whose sessions get context-keeper treatment (early/idle
+	 * compaction, pre-compaction reminder, ingestion pruner, and the
+	 * arc/checkpoint compaction override). Any model from another provider
+	 * uses pi's built-in compaction untouched. Default: true local servers
+	 * (llama.cpp, lmstudio, ollama) — API providers, however cheap, ingest
+	 * prompts fast enough that pi's own threshold is fine. Distinct from
+	 * rescue.localProviders, which is about rescue-capture semantics.
+	 */
+	providers?: string[];
+	/**
 	 * Compaction summary style. Default "arc".
 	 * - "arc": deterministic digest (ARC-style) — no model call, instant,
 	 *   no paraphrase loss; the recall tool recovers exact content.
@@ -120,11 +130,11 @@ export interface ContextConfig {
 	maxTokens?: number;
 	/**
 	 * Proactively compact when the context reaches this many tokens (only
-	 * while a LOCAL provider is active — see rescue.localProviders). pi's
-	 * own threshold (contextWindow - reserveTokens) is far too late for a
-	 * local server: at 500 tok/s prompt speed, a 150k-token re-ingest is
-	 * minutes. dsh compacts at 0.8x context; ACM keeps the working set at
-	 * 20-60k. Unset/0 disables the early trigger.
+	 * while a context.providers provider is active). pi's own threshold
+	 * (contextWindow - reserveTokens) is far too late for a local server:
+	 * at 500 tok/s prompt speed, a 150k-token re-ingest is minutes. dsh
+	 * compacts at 0.8x context; ACM keeps the working set at 20-60k.
+	 * Unset/0 disables the early trigger.
 	 */
 	compactAtTokens?: number;
 	/**
@@ -234,6 +244,14 @@ export interface ModeConfig {
 }
 
 export const DEFAULT_LOCAL_PROVIDERS = ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"];
+
+/**
+ * Default context.providers: providers slow enough at prompt ingestion that
+ * context-keeper's early compaction and digest override pay off. Narrower
+ * than DEFAULT_LOCAL_PROVIDERS on purpose: abliteration-ai is a hosted API
+ * with big windows — pi's built-in compaction handles it.
+ */
+export const DEFAULT_CONTEXT_PROVIDERS = ["llama.cpp", "lmstudio", "ollama"];
 
 export interface GeocineConfig {
 	consultants: Record<string, ConsultantConfig>;

@@ -17,6 +17,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import {
 	activeMode,
 	CONFIG_FILE,
+	DEFAULT_CONTEXT_PROVIDERS,
 	type GeocineConfig,
 	loadConfig,
 	logDir,
@@ -348,6 +349,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 				],
 				{
 					header: [
+						`providers: ${(c.providers ?? DEFAULT_CONTEXT_PROVIDERS).join(", ")} (others use pi built-in)`,
 						`early compact: ${c.compactAtTokens ? `${c.compactAtTokens} tokens` : "pi default"}${c.idleCompactMinutes ? ` · idle: ${c.idleCompactMinutes}m` : ""}`,
 					],
 				},
