@@ -82,9 +82,10 @@
 	},
 
 	"qwen": {
-		"$comment": "Persisted Qwen thinking state set via /harness (auto mode + budget level) — survives restarts and /reload.",
+		"$comment": "Persisted Qwen thinking state set via /harness (auto mode + budget level) — survives restarts and /reload. imageLevel overrides the level for turns whose latest message carries an image (set via /harness image <level|inherit>; omit for no override).",
 		"auto": true,
-		"level": "medium"
+		"level": "medium",
+		"imageLevel": "low"
 	},
 
 	"harness": {

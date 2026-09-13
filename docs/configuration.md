@@ -133,6 +133,12 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
 - `qwen.auto` / `qwen.level` — persisted Qwen thinking state, set via
   `/harness auto` and `/harness <level>` (written automatically by the
   command; survives restarts and `/reload`).
+- `qwen.imageLevel` — thinking level for turns whose latest message contains
+  an image (fresh screenshot or attachment). Overrides both the manual level
+  and auto mode for that request only; follow-up tool turns return to the
+  normal policy. Vision ingestion already dominates the prompt on local
+  models, so `"low"` or `"off"` keeps image turns fast. Set via
+  `/harness image <level|inherit>`; omit (or pick `inherit`) for no override.
 
 See [context.md](context.md) for the design and the research behind it.
 

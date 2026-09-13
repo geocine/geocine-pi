@@ -27,8 +27,9 @@ import {
 } from "../lib/config.ts";
 import { distillRescue, latestRescueRecord, LESSONS_DIR } from "../lib/distill.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
+import { harnessHubLine, harnessMenu } from "./models/index.ts";
 
-const SECTIONS = ["mode", "consultants", "approval", "context", "watchdog", "rescue", "data", "distill", "log", "lessons", "config"] as const;
+const SECTIONS = ["mode", "consultants", "approval", "context", "harness", "watchdog", "rescue", "data", "distill", "log", "lessons", "config"] as const;
 type Section = (typeof SECTIONS)[number];
 
 function onOff(v: boolean): string {
@@ -369,6 +370,9 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 			ctx.ui.notify(`context.${key}: ${onOff(next)} (persisted)`, "info");
 			return;
 		}
+		case "harness":
+			await harnessMenu(ctx);
+			return;
 		case "watchdog": {
 			const next = cfg.watchdog?.enabled === false;
 			updateGlobalConfig((g) => {
@@ -472,6 +476,11 @@ export default function geocineMenu(pi: ExtensionAPI) {
 						value: "context",
 						label: "Context keeper",
 						description: `${contextMode.toUpperCase()} · pruner ${onOff(cfg.context?.pruner !== false)} · recall ${onOff(cfg.context?.recall !== false)}${cfg.context?.compactAtTokens ? ` · compact at ${Math.round(cfg.context.compactAtTokens / 1000)}k` : ""}`,
+					},
+					{
+						value: "harness",
+						label: "Model harness",
+						description: harnessHubLine(ctx),
 					},
 					{
 						value: "watchdog",

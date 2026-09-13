@@ -26,6 +26,67 @@ function activeHarness(ctx: ExtensionContext | undefined): ModelHarness | undefi
 	return HARNESSES.find((h) => h.matches(ctx));
 }
 
+function refreshStatus(ctx: ExtensionContext): void {
+	if (!ctx.ui?.setStatus) return;
+	const harness = activeHarness(ctx);
+	// A harness with no behaviors is a declared slot, not active machinery;
+	// keep the footer quiet for it.
+	if (!harness || harness.behaviors.length === 0) {
+		ctx.ui.setStatus(STATUS_ID, undefined);
+		return;
+	}
+	ctx.ui.setStatus(STATUS_ID, harness.status?.(ctx) ?? harness.id);
+}
+
+/** One-line state for the /geocine hub row. */
+export function harnessHubLine(ctx: ExtensionContext): string {
+	const active = activeHarness(ctx);
+	if (active) return `${active.status?.(ctx) ?? active.id} — thinking, dialects, model tools`;
+	return `no harness for current model · ${HARNESSES.map((h) => h.id).join(" / ")}`;
+}
+
+/**
+ * Interactive harness registry (also the no-arg /harness handler): pick a
+ * harness, see its behaviors, run its action rows (values go to onCommand).
+ */
+export async function harnessMenu(ctx: ExtensionContext): Promise<void> {
+	const model = ctx.model;
+	const label = model ? `${model.provider}/${model.id}` : "none";
+	const active = activeHarness(ctx);
+	for (;;) {
+		const items: SelectItem[] = HARNESSES.map((h) => ({
+			value: h.id,
+			label: `${h === active ? "* " : "  "}${h.id}`,
+			description:
+				h.behaviors.length === 0
+					? `declared slot — no custom behaviors yet (extensions/models/${h.id}.ts)`
+					: (h.summary ?? h.behaviors[0]),
+		}));
+		const picked = await richSelect(ctx, "Model harnesses (* = active)", items, {
+			header: [`model: ${label}`],
+		});
+		if (!picked) return;
+		const target = HARNESSES.find((h) => h.id === picked);
+		if (!target) return;
+		const actions = target.menuItems?.(ctx) ?? [];
+		if (actions.length === 0 || !target.onCommand) {
+			// Nothing to configure: show the behavior list and reopen the registry.
+			ctx.ui.notify(
+				[`${target.id}:`, ...target.behaviors.map((b) => `- ${b}`)].join("\n") ||
+					`${target.id}: no custom behaviors yet`,
+				"info",
+			);
+			continue;
+		}
+		const act = await richSelect(ctx, `${target.id}${target === active ? " (active)" : ""}`, actions, {
+			header: target.behaviors.map((b) => `- ${b}`),
+		});
+		if (act === undefined) continue; // escape: back to the registry
+		await target.onCommand(act, ctx, refreshStatus);
+		return;
+	}
+}
+
 export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 	for (const harness of HARNESSES) {
 		harness.registerTools?.(pi);
@@ -36,61 +97,15 @@ export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 	registerTodoTool(pi);
 	registerWebTools(pi);
 
-	function refreshStatus(ctx: ExtensionContext): void {
-		if (!ctx.ui?.setStatus) return;
-		const harness = activeHarness(ctx);
-		// A harness with no behaviors is a declared slot, not active machinery;
-		// keep the footer quiet for it.
-		if (!harness || harness.behaviors.length === 0) {
-			ctx.ui.setStatus(STATUS_ID, undefined);
-			return;
-		}
-		ctx.ui.setStatus(STATUS_ID, harness.status?.(ctx) ?? harness.id);
-	}
-
 	pi.registerCommand("harness", {
 		description: "Model harnesses: no arg lists them; /harness [id] <args> routes to a harness (e.g. /harness auto)",
 		handler: async (rawArgs, ctx) => {
 			const input = String(rawArgs ?? "").trim();
 
-			// No args: interactive registry panel. Selecting a harness opens
-			// its detail view; action rows (from menuItems) route to onCommand.
+			// No args: interactive registry panel (shared with /geocine harness).
 			if (!input) {
-				const model = ctx.model;
-				const label = model ? `${model.provider}/${model.id}` : "none";
-				const active = activeHarness(ctx);
-				for (;;) {
-					const items: SelectItem[] = HARNESSES.map((h) => ({
-						value: h.id,
-						label: `${h === active ? "* " : "  "}${h.id}`,
-						description:
-							h.behaviors.length === 0
-								? `declared slot — no custom behaviors yet (extensions/models/${h.id}.ts)`
-								: (h.summary ?? h.behaviors[0]),
-					}));
-					const picked = await richSelect(ctx, "Model harnesses (* = active)", items, {
-						header: [`model: ${label}`],
-					});
-					if (!picked) return;
-					const target = HARNESSES.find((h) => h.id === picked);
-					if (!target) return;
-					const actions = target.menuItems?.(ctx) ?? [];
-					if (actions.length === 0 || !target.onCommand) {
-						// Nothing to configure: show the behavior list and reopen the registry.
-						ctx.ui.notify(
-							[`${target.id}:`, ...target.behaviors.map((b) => `- ${b}`)].join("\n") ||
-								`${target.id}: no custom behaviors yet`,
-							"info",
-						);
-						continue;
-					}
-					const act = await richSelect(ctx, `${target.id}${target === active ? " (active)" : ""}`, actions, {
-						header: target.behaviors.map((b) => `- ${b}`),
-					});
-					if (act === undefined) continue; // escape: back to the registry
-					await target.onCommand(act, ctx, refreshStatus);
-					return;
-				}
+				await harnessMenu(ctx);
+				return;
 			}
 
 			// "/harness <id> <args>" targets a harness by name; otherwise the

@@ -167,6 +167,13 @@ export interface QwenConfig {
 	auto?: boolean;
 	/** Persisted Qwen manual thinking level, set via /harness (also the budget auto-mode borrows). */
 	level?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
+	/**
+	 * Thinking level for turns whose latest message contains an image
+	 * (fresh screenshot/attachment). Overrides both the manual level and
+	 * auto mode for that request only. Unset = no override. Set via
+	 * /harness image <level|inherit>.
+	 */
+	imageLevel?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export interface HarnessConfig {

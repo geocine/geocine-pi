@@ -17,6 +17,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { loadConfig, updateGlobalConfig } from "../../lib/config.ts";
+import { richSelect } from "../../lib/rich-select.ts";
 import { msToSeconds, rekey, secondsToMs, type ToolAlias } from "./aliases.ts";
 import { type ModelHarness, modelBlob } from "./types.ts";
 
@@ -543,6 +544,12 @@ type QwenLevel = "off" | "low" | "medium" | "high" | "xhigh" | "max";
 const QWEN_LEVELS: QwenLevel[] = ["off", "low", "medium", "high", "xhigh", "max"];
 let manualLevel: QwenLevel = "off";
 
+// Image-turn override: when the latest message carries an image (fresh
+// screenshot/attachment), use this level instead of manual/auto. Vision
+// ingestion already dominates the prompt; long reasoning on top of it is
+// usually wasted tokens. undefined = no override.
+let imageLevel: QwenLevel | undefined;
+
 const LEVEL_BUDGETS: Record<QwenLevel, number | undefined> = {
 	off: undefined,
 	low: 1024,
@@ -564,12 +571,15 @@ function hydrateQwenState(): void {
 	const q = loadConfig().qwen ?? {};
 	autoThinking = q.auto === true;
 	manualLevel = q.level && QWEN_LEVELS.includes(q.level as QwenLevel) ? (q.level as QwenLevel) : "off";
+	imageLevel =
+		q.imageLevel && QWEN_LEVELS.includes(q.imageLevel as QwenLevel) ? (q.imageLevel as QwenLevel) : undefined;
 }
 hydrateQwenState();
 
 function persistQwenState(): void {
 	updateGlobalConfig((g) => {
-		g.qwen = { ...(g.qwen ?? {}), auto: autoThinking, level: manualLevel };
+		// imageLevel: undefined drops the key on stringify (= inherit).
+		g.qwen = { ...(g.qwen ?? {}), auto: autoThinking, level: manualLevel, imageLevel };
 	});
 }
 
@@ -597,11 +607,34 @@ function lastRelevantMessage(payload: JsonObject): { role: string; text: string 
 	return undefined;
 }
 
+// True when the latest non-system message carries an image block. Pi's
+// openai-completions conversion (used for llama.cpp) emits images as
+// { type: "image_url" } content parts — both user attachments and images
+// hoisted out of tool results. Only the LATEST message counts: the override
+// targets the ingestion turn; follow-up tool loops return to normal levels.
+function lastMessageHasImage(payload: JsonObject): boolean {
+	const messages = Array.isArray(payload.messages) ? payload.messages : [];
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = asObject(messages[i]);
+		if (!msg) continue;
+		if (String(msg.role ?? "") === "system") continue;
+		if (!Array.isArray(msg.content)) return false;
+		return msg.content.some((block) => {
+			const type = asObject(block)?.type;
+			return type === "image_url" || type === "image";
+		});
+	}
+	return false;
+}
+
 function resolveThinking(
 	payload: JsonObject,
 	ctx: ExtensionContext,
 ): { enabled: boolean; budget: number | undefined } {
 	if (isQwenCoder(ctx)) return { enabled: false, budget: undefined };
+	if (imageLevel !== undefined && lastMessageHasImage(payload)) {
+		return { enabled: imageLevel !== "off", budget: LEVEL_BUDGETS[imageLevel] };
+	}
 	if (!autoThinking) {
 		return { enabled: manualLevel !== "off", budget: LEVEL_BUDGETS[manualLevel] };
 	}
@@ -651,7 +684,7 @@ function statusText(ctx: ExtensionContext): string {
 			: manualLevel === "off"
 				? "focus"
 				: `think:${manualLevel}`;
-	return `qwen ${mode}`;
+	return `qwen ${mode}${imageLevel !== undefined ? ` img:${imageLevel}` : ""}`;
 }
 
 let lastNotifyKey = "";
@@ -934,8 +967,9 @@ export const qwenHarness: ModelHarness = {
 		"tool-call repair: name aliases, arg remapping, XML tool-call recovery (any provider)",
 		"llama.cpp: relaxes tool schemas that crash the grammar converter",
 		"llama.cpp: thinking control with budgets + Qwen3 sampling defaults (/harness <level>|auto)",
+		"llama.cpp: separate thinking level for image turns (/harness image <level>|inherit)",
 	],
-	commandHint: "off|low|medium|high|xhigh|max|auto",
+	commandHint: "off|low|medium|high|xhigh|max|auto|image <level|inherit>",
 	summary: "qwen-code tool dialect · call repair · llama.cpp schemas + thinking control",
 	menuItems() {
 		const items: SelectItem[] = [
@@ -943,6 +977,11 @@ export const qwenHarness: ModelHarness = {
 				value: "auto",
 				label: `auto ${autoThinking ? "ON" : "OFF"}`,
 				description: "enter toggles — think on user turns and tool errors, focus during tool loops",
+			},
+			{
+				value: "image",
+				label: `image ${imageLevel ?? "inherit"}`,
+				description: "thinking level when the latest message has an image — enter picks",
 			},
 		];
 		for (const level of QWEN_LEVELS) {
@@ -973,6 +1012,55 @@ export const qwenHarness: ModelHarness = {
 
 	async onCommand(args, ctx, refreshStatus) {
 		const arg = args.trim().toLowerCase();
+		if (arg === "image" || arg.startsWith("image ")) {
+			let value = arg.slice("image".length).trim();
+			if (!value) {
+				const picked = await richSelect(
+					ctx,
+					"Thinking on image turns",
+					[
+						{
+							value: "inherit",
+							label: `${imageLevel === undefined ? "* " : "  "}inherit`,
+							description: "no override — image turns use the normal level / auto mode",
+						},
+						...QWEN_LEVELS.map((level) => {
+							const budget = LEVEL_BUDGETS[level];
+							return {
+								value: level,
+								label: `${level === imageLevel ? "* " : "  "}${level}`,
+								description:
+									level === "off"
+										? "no thinking on image turns"
+										: budget !== undefined
+											? `thinking budget ${budget} tokens`
+											: "thinking on, no budget cap",
+							};
+						}),
+					],
+					{ header: ["applies when the latest message contains an image (screenshot, attachment)"] },
+				);
+				if (!picked) return;
+				value = picked;
+			}
+			if (value === "inherit" || value === "none") {
+				imageLevel = undefined;
+			} else if (QWEN_LEVELS.includes(value as QwenLevel)) {
+				imageLevel = value as QwenLevel;
+			} else {
+				ctx.ui.notify(`Unknown image level "${value}" — use ${QWEN_LEVELS.join(", ")}, inherit`, "error");
+				return;
+			}
+			persistQwenState();
+			refreshStatus(ctx);
+			ctx.ui.notify(
+				imageLevel === undefined
+					? "Image turns: no override (normal thinking level applies)"
+					: `Image turns: thinking ${imageLevel}${LEVEL_BUDGETS[imageLevel] !== undefined ? `, budget ${LEVEL_BUDGETS[imageLevel]} tokens` : imageLevel === "off" ? "" : ", no budget cap"}`,
+				"info",
+			);
+			return;
+		}
 		if (arg === "auto") {
 			autoThinking = !autoThinking;
 			persistQwenState();
@@ -1003,7 +1091,7 @@ export const qwenHarness: ModelHarness = {
 			return;
 		}
 		if (arg) {
-			ctx.ui.notify(`Unknown option "${arg}" — use ${QWEN_LEVELS.join(", ")}, auto`, "error");
+			ctx.ui.notify(`Unknown option "${arg}" — use ${QWEN_LEVELS.join(", ")}, auto, image <level|inherit>`, "error");
 			return;
 		}
 		const model = ctx.model;
@@ -1016,9 +1104,10 @@ export const qwenHarness: ModelHarness = {
 				: manualLevel === "off"
 					? "focus, thinking off"
 					: `thinking ${manualLevel}${budget !== undefined ? `, budget ${budget}` : ", no cap"}`;
+		const imageSuffix = imageLevel !== undefined ? `; image turns: ${imageLevel}` : "";
 		ctx.ui.notify(
 			isQwenModel(ctx)
-				? `Qwen harness ON for ${label} (${mode})`
+				? `Qwen harness ON for ${label} (${mode}${imageSuffix})`
 				: `Qwen harness idle (model name does not contain "qwen"): ${label}`,
 			"info",
 		);
