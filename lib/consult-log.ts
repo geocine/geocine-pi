@@ -17,6 +17,9 @@ export type LogRecord =
 	| PrescreenRecord
 	| ConsultResultRecord
 	| WatchdogRecord
+	| TriageRecord
+	| GateRecord
+	| GuardRecord
 	| RescueRecord
 	| CompactionRecord;
 
@@ -51,7 +54,7 @@ export interface ConsultRequestRecord extends BaseRecord {
 	 * "the model picked the wrong rescuer for this kind of problem".
 	 */
 	proposedConsultant?: string;
-	chosenBy?: "model" | "default" | "user_override" | "auto";
+	chosenBy?: "model" | "default" | "judge" | "user_override" | "auto";
 	/** Session mode active when the consult was requested (routing feature). */
 	mode?: string;
 }
@@ -104,13 +107,75 @@ export interface ConsultResultRecord extends BaseRecord {
 
 export interface WatchdogRecord extends BaseRecord {
 	type: "watchdog";
-	tier: 0 | 1;
+	/** 0 = counters, 1 = small-LLM verifier, "judge" = System One classifier. */
+	tier: 0 | 1 | "judge";
 	verdict: "ok" | "loop" | "stuck" | "drift" | "error";
 	reason: string;
 	/** The digest the verdict was computed from (decision-time features). */
 	digest: string;
 	hintSent: boolean;
 	turnIndex: number;
+	/** Judge's escalate-now probability from the same call, when asked. */
+	escalateP?: number;
+}
+
+export interface GateRecord extends BaseRecord {
+	type: "gate";
+	/** The user task being verified (snippet). */
+	task: string;
+	/** Judge's "complete and correct" probability from the evidence. */
+	doneP?: number;
+	/** Judge's "worse than before — revert beats forward-fixing" probability. */
+	revertP?: number;
+	/** Risk that the diff breaks existing behavior beyond the task. */
+	regressionP?: number;
+	/** Probability the diff contains off-task changes. */
+	scopeCreepP?: number;
+	/** Probability the diff is structural rather than a local fix. */
+	archP?: number;
+	/** Probability the changed behavior lacks test evidence. */
+	needsTestsP?: number;
+	/** Probability a human decision point blocks — suppresses nudges. */
+	needsHumanP?: number;
+	next: "continue" | "stop" | "escalate";
+	confidence: number;
+	/** git diff --stat tail at decision time (evidence summary). */
+	diffStat?: string;
+	/** How many captured test/lint/build outputs fed the judgment. */
+	checksSeen: number;
+	contextTokens?: number;
+	/** Turns in the settled run. */
+	turns: number;
+	/** An idle nudge was sent back into the session (continue/escalate). */
+	nudged: boolean;
+}
+
+export interface GuardRecord extends BaseRecord {
+	type: "guard";
+	/** The destructive-looking command (truncated). */
+	command: string;
+	/** The user task it was judged against (snippet). */
+	task: string;
+	/** Judge's collateral-damage probability. */
+	riskyP?: number;
+	blocked: boolean;
+	tool: string;
+}
+
+export interface TriageRecord extends BaseRecord {
+	type: "triage";
+	/** The user task as judged (snippet). */
+	task: string;
+	/** Difficulty score 0..3 over the triage levels (may land between). */
+	difficulty?: number;
+	route: "local" | "plan_first" | "frontier";
+	confidence: number;
+	/** Session stage at decision time. */
+	contextTokens?: number;
+	turnIndex: number;
+	/** Rescuer the hint named, when one was sent. */
+	rescuer?: string;
+	hintSent: boolean;
 }
 
 export interface RescueToolEvent {

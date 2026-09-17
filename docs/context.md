@@ -221,7 +221,7 @@ deepseek-harness `compaction-basic`:
   llama.cpp server reuses its KV cache instead of re-ingesting everything;
 - **shrink guarantee**: a summary that is not clearly smaller than what it
   replaces falls back to pi's default compaction;
-- `context.summarizer` names a consultant whose model writes the
+- `context.summarizer` names a registry entry whose model writes the
   checkpoint (default: the session's own model — free + warm cache).
 
 ### `"off"` — pi's default compaction.
@@ -246,7 +246,7 @@ forward — future training data for a better local summarizer.
   "prunerThresholdChars": 6000,
   "prunerHeadChars": 1500,
   "prunerTailChars": 1500,
-  "summarizer": "local-big",     // checkpoint mode only: consultant name; default = session model
+  "summarizer": "qwen-27b",      // checkpoint mode only: registry entry; default = session model
   "maxTokens": 4096              // checkpoint length cap
 }
 ```

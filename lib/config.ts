@@ -2,43 +2,55 @@
 //
 // One config file rules everything: ~/.pi/agent/geocine.json (global),
 // optionally overridden by .pi/geocine.json in the project (shallow merge,
-// consultants merged by name). See geocine.example.json in the package root.
+// models merged by name). See geocine.example.json in the package root.
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { JudgeSettings } from "./judge/types.ts";
 
-export interface ConsultantConfig {
+export interface ModelConfig {
 	/** pi --provider value (e.g. "openrouter", "llama.cpp"). */
 	provider?: string;
 	/** pi --model value (e.g. "deepseek/deepseek-v4-pro-0813"). */
 	model: string;
 	/**
-	 * What this consultant is the right rescuer FOR, in one line
+	 * What this model is the right rescuer FOR, in one line
 	 * (e.g. "hard debugging and root-cause analysis", "architecture and
 	 * planning", "content strict models falsely refuse"). Shown to the
 	 * local model in the consult tool description (it proposes a rescuer
 	 * by role) and to the user in the approval prompt.
 	 */
 	role?: string;
+	/**
+	 * Capability classes, free-form but with a suggested vocabulary:
+	 * "default", "frontier", "abliterated", "cheap", "fast", "local",
+	 * "intelligent". Anywhere a model name is accepted (the consult
+	 * tool's `model` param, /consult @name) a class name resolves to a
+	 * model carrying it, and the judge's route node uses classes to
+	 * pick the cheapest model whose capabilities cover the need — the
+	 * standing goal is to spend as few LLM tokens as possible. A model
+	 * classed "default" is the fallback when nothing else decides.
+	 */
+	classes?: string[];
 	/** pi --thinking value. */
 	thinking?: string;
 	/**
 	 * Jail mode:
-	 *  - "staged": consultant runs in a temp dir containing ONLY staged files
+	 *  - "staged": model runs in a temp dir containing ONLY staged files
 	 *    (context firewall — bounds its input token spend). Default.
 	 *  - "docker": staged + wrapped in the vendored docker jail (needs image).
-	 *  - "none": consultant runs in the live cwd with read-only tools
-	 *    (for free/local/lenient consultants where token waste costs nothing).
+	 *  - "none": model runs in the live cwd with read-only tools
+	 *    (for free/local/lenient models where token waste costs nothing).
 	 */
 	jail?: "staged" | "docker" | "none";
 	/** Run the local guardrail pre-screen before consulting. Default false. */
 	prescreen?: boolean;
 	/** Extra notes injected into the briefing (e.g. persona/emphasis). */
 	notes?: string;
-	/** Env var NAMES this consultant needs forwarded into a docker jail. */
+	/** Env var NAMES this model needs forwarded into a docker jail. */
 	envKeys?: string[];
-	/** Skip the user approval prompt for LLM-invoked consults of this consultant. */
+	/** Skip the user approval prompt for LLM-invoked consults of this model. */
 	autoApprove?: boolean;
 }
 
@@ -63,6 +75,14 @@ export interface WatchdogConfig {
 	baseUrl?: string;
 	model?: string;
 	apiKeyEnv?: string;
+	/**
+	 * When a judge classifier is configured, ask it for a verdict on EVERY
+	 * turn that has new tool activity, not only when a tier-0 counter fires.
+	 * This is what makes drift detectable at all (no counter can see it),
+	 * and System One calls are fast/cheap enough to afford it. false =
+	 * judge only verifies counter findings. Default true.
+	 */
+	judgeEveryTurn?: boolean;
 	/** Inject "Located" hints back into the main session. Default true. */
 	sendHints?: boolean;
 	/** Minimum turns between two hints. Default 4. */
@@ -73,9 +93,64 @@ export interface WatchdogConfig {
 	failStreakThreshold?: number;
 }
 
+export interface TriageConfig {
+	/**
+	 * Judge-powered task routing: at task start, score difficulty for the
+	 * local model and pick a route (local / plan-first / frontier); mid-task,
+	 * an escalate-now probability rides the watchdog's every-turn judge
+	 * call. Requires a configured judge — silently off without one.
+	 * Default true.
+	 */
+	enabled?: boolean;
+	/**
+	 * Mid-task escalate probability (noul) needed before suggesting a
+	 * consult. High on purpose: the suggestion interrupts the loop.
+	 * Default 0.75.
+	 */
+	escalateThreshold?: number;
+	/** Minimum turns between two escalate suggestions. Default 8. */
+	cooldownTurns?: number;
+}
+
+export interface GateConfig {
+	/**
+	 * Outcome gate: when the agent settles, judge the WORK PRODUCT (git
+	 * diff, captured test/lint outputs, trace) — is the task done, and who
+	 * acts next: continue (nudge the local model on), stop (done or needs
+	 * the user), escalate (suggest a frontier consult). Requires a
+	 * configured judge — silently off without one. Default true.
+	 */
+	enabled?: boolean;
+	/**
+	 * Max idle nudges (continue/escalate) per user task; a nudge starts a
+	 * new local run, so this caps automatic token spend. Default 1.
+	 */
+	maxNudgesPerTask?: number;
+	/** Max characters of git diff evidence sent to the judge. Default 8000. */
+	maxDiffChars?: number;
+}
+
+export interface GuardConfig {
+	/**
+	 * Command guard: destructive-looking shell commands (recursive deletes,
+	 * hard resets, force pushes, DROP TABLE, ...) are judged against the
+	 * current task before execution; confident collateral damage is
+	 * blocked with a reason the model sees. Deterministic prefilter first,
+	 * so the judge only sees the rare suspicious command. No judge = allow
+	 * (pi's own tool approval remains the fallback). Default true.
+	 */
+	enabled?: boolean;
+	/**
+	 * Collateral-damage probability needed to block. High on purpose —
+	 * blocking a legitimate command is worse than letting pi's approval
+	 * flow handle it. Default 0.8.
+	 */
+	blockThreshold?: number;
+}
+
 export interface PrescreenConfig {
-	/** Consultant name (from consultants) used as the local screener. */
-	consultant?: string;
+	/** Model name (from models) used as the local screener. */
+	model?: string;
 	/** Max staged bytes shown to the screener. Default 24576. */
 	maxBytes?: number;
 }
@@ -94,8 +169,8 @@ export interface RescueConfig {
 	 * Default: ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"].
 	 */
 	localProviders?: string[];
-	/** Consultant used by /distill to draft lessons. Default: prescreen consultant. */
-	distillConsultant?: string;
+	/** Model used by /distill to draft lessons. Default: prescreen model. */
+	distillModel?: string;
 }
 
 export interface ContextConfig {
@@ -121,7 +196,7 @@ export interface ContextConfig {
 	/** @deprecated Legacy toggle: false = mode "off". Use `mode` instead. */
 	checkpoint?: boolean;
 	/**
-	 * Consultant name (from consultants) whose model writes the checkpoint
+	 * Registry entry (from `models`) that writes the checkpoint
 	 * (mode "checkpoint" only). Default: the session's own model — for a
 	 * local model this keeps the call on the warm KV cache.
 	 */
@@ -223,27 +298,22 @@ export interface PdfConfig {
 	maxSearchMatches?: number;
 }
 
-export interface ModeConfig {
-	/** One line shown in menus (e.g. "RE / sensitive content"). */
-	description?: string;
-	/**
-	 * Consultant names selectable while this mode is active (both for the
-	 * LLM-invoked tool and /consult). Unset = all consultants.
-	 */
-	consultants?: string[];
-	/** Default rescuer while this mode is active (overrides defaultConsultant). */
-	defaultConsultant?: string;
-	/**
-	 * Prescreen policy for staged consults in this mode:
-	 *  - "consultant" (default): per-consultant `prescreen` flag decides.
-	 *  - "force": every staged consult is prescreened, whatever the flag —
-	 *    for sessions whose content risks guardrail false positives.
-	 *  - "skip": never prescreen — for plain coding sessions.
-	 */
-	prescreen?: "consultant" | "force" | "skip";
-}
-
 export const DEFAULT_LOCAL_PROVIDERS = ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"];
+
+/**
+ * True when the session's ACTIVE model runs on a cheap/local provider
+ * (rescue.localProviders). Precondition for all escalation machinery that
+ * INJECTS messages — triage steers, mid-task escalate suggestions,
+ * outcome-gate nudges. Injected messages grow an expensive main model's
+ * context to suggest what the user already did (switch up), so a frontier
+ * main model gets verdicts and status lines only. Decisions themselves
+ * stay on the classifier: LLM tokens are for work, never for deciding.
+ */
+export function isLocalWorker(model: unknown, cfg: GeocineConfig): boolean {
+	const provider = (model as { provider?: string } | undefined)?.provider;
+	if (!provider) return false;
+	return (cfg.rescue?.localProviders ?? DEFAULT_LOCAL_PROVIDERS).includes(provider);
+}
 
 /**
  * Default context.providers: providers slow enough at prompt ingestion that
@@ -254,18 +324,11 @@ export const DEFAULT_LOCAL_PROVIDERS = ["llama.cpp", "lmstudio", "ollama", "abli
 export const DEFAULT_CONTEXT_PROVIDERS = ["llama.cpp", "lmstudio", "ollama"];
 
 export interface GeocineConfig {
-	consultants: Record<string, ConsultantConfig>;
-	/** Name of the default consultant for /consult and the consult tool. */
-	defaultConsultant?: string;
-	/** Named session profiles (consultant set + default + prescreen policy). */
-	modes?: Record<string, ModeConfig>;
-	/**
-	 * Mode active by default. A project .pi/geocine.json can pin a different
-	 * one (e.g. "sensitive" in an RE folder); /geocine mode switches it for
-	 * the current session without touching config files.
-	 */
-	mode?: string;
+	models: Record<string, ModelConfig>;
 	watchdog?: WatchdogConfig;
+	triage?: TriageConfig;
+	gate?: GateConfig;
+	guard?: GuardConfig;
 	prescreen?: PrescreenConfig;
 	docker?: DockerConfig;
 	rescue?: RescueConfig;
@@ -275,6 +338,14 @@ export interface GeocineConfig {
 	harness?: HarnessConfig;
 	pdf?: PdfConfig;
 	web?: WebConfig;
+	/**
+	 * System One classifier (lib/judge): fast typed judgments used by the
+	 * watchdog (verdict confirmation) and the advisor prescreen (refusal
+	 * risk). Unset/unreachable = those call sites keep their heuristic or
+	 * LLM fallbacks. provider is a backend id so the classifier is
+	 * replaceable without touching call sites.
+	 */
+	judge?: JudgeSettings;
 	/** Directory for decision logs. Default ~/.pi/agent/consult-log */
 	logDir?: string;
 }
@@ -294,11 +365,11 @@ export function loadConfig(cwd?: string): GeocineConfig {
 	const project = cwd ? readJson(path.join(cwd, ".pi", "geocine.json")) : undefined;
 
 	const merged: GeocineConfig = {
-		consultants: { ...(global.consultants ?? {}), ...(project?.consultants ?? {}) },
-		defaultConsultant: project?.defaultConsultant ?? global.defaultConsultant,
-		modes: { ...(global.modes ?? {}), ...(project?.modes ?? {}) },
-		mode: project?.mode ?? global.mode,
+		models: stripCommentKeys({ ...(global.models ?? {}), ...(project?.models ?? {}) }),
 		watchdog: { ...(global.watchdog ?? {}), ...(project?.watchdog ?? {}) },
+		triage: { ...(global.triage ?? {}), ...(project?.triage ?? {}) },
+		gate: { ...(global.gate ?? {}), ...(project?.gate ?? {}) },
+		guard: { ...(global.guard ?? {}), ...(project?.guard ?? {}) },
 		prescreen: { ...(global.prescreen ?? {}), ...(project?.prescreen ?? {}) },
 		docker: { ...(global.docker ?? {}), ...(project?.docker ?? {}) },
 		rescue: { ...(global.rescue ?? {}), ...(project?.rescue ?? {}) },
@@ -308,107 +379,91 @@ export function loadConfig(cwd?: string): GeocineConfig {
 		harness: { ...(global.harness ?? {}), ...(project?.harness ?? {}) },
 		pdf: { ...(global.pdf ?? {}), ...(project?.pdf ?? {}) },
 		web: { ...(global.web ?? {}), ...(project?.web ?? {}) },
+		judge: { ...(global.judge ?? {}), ...(project?.judge ?? {}) },
 		logDir: project?.logDir ?? global.logDir,
 	};
+	// Wire the judge trace into the consult-log dir (an explicit traceDir
+	// wins). The trace is the offline-classifier dataset — see lib/judge.
+	merged.judge = { traceDir: logDir(merged), ...(merged.judge ?? {}) };
 	return merged;
 }
 
-// ---------- session modes ----------
-
-// Session-scoped mode override, set from /geocine mode. All extensions share
-// this module instance, so the override is visible everywhere immediately;
-// it does not survive a restart (the config `mode` field is the default).
-let sessionModeOverride: string | null | undefined;
-
-/** Override the active mode for this session. null = force "no mode". */
-export function setSessionMode(name: string | null | undefined): void {
-	sessionModeOverride = name;
+/** JSON configs use "$comment" keys inside maps; they are not entries. */
+function stripCommentKeys<T>(obj: Record<string, T>): Record<string, T> {
+	return Object.fromEntries(Object.entries(obj).filter(([k]) => !k.startsWith("$")));
 }
 
-export interface ActiveMode {
-	name: string;
-	mode: ModeConfig;
-	/** True when the mode comes from the session override, not config. */
-	sessionOverride: boolean;
-}
-
-/** The mode in effect: session override → project/global config `mode`. */
-export function activeMode(cfg: GeocineConfig): ActiveMode | undefined {
-	const fromSession = sessionModeOverride !== undefined;
-	const name = fromSession ? sessionModeOverride : cfg.mode;
-	if (!name) return undefined;
-	const mode = cfg.modes?.[name];
-	return mode ? { name, mode, sessionOverride: fromSession } : undefined;
-}
-
-/** Consultants selectable as rescuers under the active mode. */
-export function modeConsultants(cfg: GeocineConfig): Record<string, ConsultantConfig> {
-	const active = activeMode(cfg);
-	if (!active?.mode.consultants?.length) return cfg.consultants;
-	const allowed = new Set(active.mode.consultants);
-	return Object.fromEntries(Object.entries(cfg.consultants).filter(([n]) => allowed.has(n)));
-}
-
-/** Effective prescreen decision for one consultant under the active mode. */
-export function shouldPrescreen(cfg: GeocineConfig, consultant: ConsultantConfig): boolean {
-	const policy = activeMode(cfg)?.mode.prescreen ?? "consultant";
-	if (policy === "force") return true;
-	if (policy === "skip") return false;
-	return consultant.prescreen === true;
+/** Effective prescreen decision for one model (its own flag). */
+export function shouldPrescreen(model: ModelConfig): boolean {
+	return model.prescreen === true;
 }
 
 /**
- * Resolve a consultant by name with NO mode filtering. For infrastructure
- * roles (prescreen screener, distiller) that must work in every mode.
+ * Resolve `wanted` within a pool: exact name first, then as a capability
+ * class (preferring a model also classed "default"). Names are just
+ * map labels — classes are the selection language.
  */
-export function resolveConsultant(
+function pickByNameOrClass(pool: Record<string, ModelConfig>, wanted: string): string | undefined {
+	if (pool[wanted]) return wanted;
+	const inClass = Object.keys(pool).filter((n) => pool[n].classes?.includes(wanted));
+	if (inClass.length === 0) return undefined;
+	return inClass.find((n) => pool[n].classes?.includes("default")) ?? inClass[0];
+}
+
+/** The addressable handles of a pool (classes; @key only when unclassed). */
+function poolHandles(pool: Record<string, ModelConfig>): string {
+	return Object.entries(pool)
+		.map(([n, c]) => (c.classes?.length ? c.classes.join("/") : `@${n}`))
+		.join(", ");
+}
+
+/**
+ * Resolve a model by capability class (or raw map key). Used by the
+ * consult tool, /consult, and infrastructure roles (prescreen screener,
+ * distiller). No name = the model classed "default", else the first
+ * configured — classes are the selection language, keys are just labels.
+ */
+export function resolveModel(
 	cfg: GeocineConfig,
 	name?: string,
-): { name: string; consultant: ConsultantConfig } | { error: string } {
-	const wanted = name ?? cfg.defaultConsultant;
-	const names = Object.keys(cfg.consultants);
+): { name: string; model: ModelConfig } | { error: string } {
+	const names = Object.keys(cfg.models);
 	if (names.length === 0) {
-		return { error: `No consultants configured. Create ${CONFIG_FILE} (see geocine.example.json).` };
+		return { error: `No models configured. Create ${CONFIG_FILE} (see geocine.example.json).` };
 	}
-	if (!wanted) {
-		return { error: `No consultant named and no defaultConsultant set. Configured: ${names.join(", ")}` };
+	if (!name) {
+		const fallback = names.find((n) => cfg.models[n].classes?.includes("default")) ?? names[0];
+		return { name: fallback, model: cfg.models[fallback] };
 	}
-	const consultant = cfg.consultants[wanted];
-	if (!consultant) {
-		return { error: `Unknown consultant "${wanted}". Configured: ${names.join(", ")}` };
+	const picked = pickByNameOrClass(cfg.models, name);
+	if (!picked) {
+		return { error: `Unknown model or class "${name}". Configured: ${poolHandles(cfg.models)}` };
 	}
-	return { name: wanted, consultant };
+	return { name: picked, model: cfg.models[picked] };
+}
+
+/** The rescuer /consult or the consult tool would use with no name given. */
+export function defaultModelName(cfg: GeocineConfig): string | undefined {
+	const resolved = resolveModel(cfg);
+	return "error" in resolved ? undefined : resolved.name;
+}
+
+/** Display label for a model: provider/model — never the map key. */
+export function modelLabel(c: ModelConfig): string {
+	return `${c.provider ?? "?"}/${c.model}`;
 }
 
 /**
- * Resolve a RESCUER: like resolveConsultant, but the active mode's
- * consultant set and default apply. Used by the consult tool and /consult,
- * so a "sensitive" session cannot accidentally route content to a
- * consultant excluded from that mode.
+ * The handle to WRITE when targeting this model (steer hints, editor
+ * prefills): its first class that resolves back to it — classes are the
+ * selection language — falling back to the raw map key for unclassed ones.
  */
-export function resolveRescuer(
-	cfg: GeocineConfig,
-	name?: string,
-): { name: string; consultant: ConsultantConfig } | { error: string } {
-	const active = activeMode(cfg);
-	const pool = modeConsultants(cfg);
-	const poolNames = Object.keys(pool);
-	if (poolNames.length === 0) {
-		return active
-			? { error: `Mode "${active.name}" allows no configured consultants. Fix modes.${active.name}.consultants in geocine.json.` }
-			: { error: `No consultants configured. Create ${CONFIG_FILE} (see geocine.example.json).` };
+export function modelHandle(cfg: GeocineConfig, name: string): string {
+	const pool = cfg.models;
+	for (const cls of pool[name]?.classes ?? []) {
+		if (pickByNameOrClass(pool, cls) === name) return cls;
 	}
-	const wanted = name ?? active?.mode.defaultConsultant ?? cfg.defaultConsultant ?? poolNames[0];
-	const consultant = pool[wanted];
-	if (!consultant) {
-		if (active && cfg.consultants[wanted]) {
-			return {
-				error: `Consultant "${wanted}" is not available in mode "${active.name}". Available: ${poolNames.join(", ")}. Switch modes via /geocine mode if this is intentional.`,
-			};
-		}
-		return { error: `Unknown consultant "${wanted}". Available: ${poolNames.join(", ")}` };
-	}
-	return { name: wanted, consultant };
+	return name;
 }
 
 export function logDir(cfg: GeocineConfig): string {

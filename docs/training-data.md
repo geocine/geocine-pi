@@ -1,7 +1,9 @@
-# Training data: the decision log and rescue episodes
+# Training data: the decision log, judge trace, and rescue episodes
 
-The point of logging everything is a flywheel: use the setup, accumulate
-labeled decisions, fine-tune the local model, consult less.
+The point of logging everything is a flywheel with two loops: fine-tune the
+**local worker** on rescue episodes and briefing→advice pairs so it consults
+less, and train your own **offline judge head** on the trace of every fabric
+decision so the decisions themselves run free.
 
 ## Decision log
 
@@ -11,7 +13,10 @@ correlation id (`cid`) per consultation/incident:
 `consult_request` (with approval + routing provenance) → `staging`
 (manifest, bytes) → `prescreen` (risk, triggers) → `consult_result`
 (advice, refusal flag, files-read utilization, usage), plus `watchdog`
-verdict records with their decision-time digests, `rescue` episode
+verdict records with their decision-time digests, `triage` records
+(task → route with difficulty/escalate probabilities), `gate` records
+(outcome-gate verdicts with their review flags), `guard` records
+(command + risky-probability + blocked/allowed), `rescue` episode
 records, and `compaction` records (summarizer, tokens replaced, outcome).
 
 What each record type trains:
@@ -19,13 +24,44 @@ What each record type trains:
 | Signal | Label it provides |
 | --- | --- |
 | Approval denials (`approval: "user_no"`) | "should not have consulted here" |
-| Routing overrides (`chosenBy: "user_override"`) | "wrong rescuer for this kind of problem" |
+| Routing overrides (`chosenBy: "user_override"`) | "wrong model for this kind of problem" — including overrides of judge picks |
 | Actual refusals (`refusalSuspected`) | guardrail-predictor labels for the prescreen |
 | Briefing → advice pairs | distillation data for the local model |
 | Watchdog digests → outcomes | escalation-policy training |
+| Triage verdicts (`triage`) | task → route labels for a local router |
+| Outcome-gate verdicts (`gate`) | "was it actually done" / revert / risk-flag labels |
+| Command-guard decisions (`guard`) | destructive-command policy labels |
 | Staging manifest vs files actually read | context-curation quality |
 
 `/geocine log` shows this month's record counts.
+
+## Judge trace
+
+Separate from the decision log: with `judge.trace` on (default), every
+**answered** fabric call appends one row to
+`~/.pi/agent/consult-log/judge-YYYY-MM.jsonl`:
+
+```json
+{"ts": "...", "node": "gate", "source": "jev", "elapsedMs": 240,
+ "context": "<the serialized state the judge saw>",
+ "schema": {"done": {"type": "boolean", "description": "..."}},
+ "labels": {"done": {"value": "true", "prob": 0.93, "probs": {...}}}}
+```
+
+That `(context, schema, labels)` shape is exactly what a parallel
+constrained-decoding head (a small model answering a whole schema of
+boolean/enum fields in one pass) trains on — noul questions folded to
+boolean fields, choice/score to enum fields, answers kept as soft labels
+with full probability mass. The naive-llm fallback tier prompts with this
+same serialization, so logged rows, fallback inference, and the future
+head share one format: train/serve parity by construction.
+
+`source` separates calibrated Jev labels from `naive-llm` ones, so weak
+labels can be filtered or down-weighted at training time. Once your head
+is trained, repoint `judge.provider` at it and every fabric decision —
+triage, watchdog, gate, guard, routing, prescreen — runs locally at zero
+marginal cost. `/geocine judge` shows per-node call stats and the trace
+location.
 
 ## Rescue episodes
 

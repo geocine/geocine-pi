@@ -23,14 +23,14 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
-	activeMode,
-	type ConsultantConfig,
+	type ModelConfig,
+	modelLabel,
+	DEFAULT_LOCAL_PROVIDERS,
+	defaultModelName,
 	type GeocineConfig,
 	loadConfig,
 	logDir,
-	modeConsultants,
-	resolveConsultant,
-	resolveRescuer,
+	resolveModel,
 	shouldPrescreen,
 	updateGlobalConfig,
 } from "../lib/config.ts";
@@ -41,6 +41,7 @@ import {
 	nowIso,
 	type StagedFile,
 } from "../lib/consult-log.ts";
+import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, type JudgeQuestion, noulOf, scoreOf } from "../lib/judge/index.ts";
 import { looksLikeRefusal, runPi, type PiProgress, type PiRunResult } from "../lib/pi-exec.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
 
@@ -119,7 +120,7 @@ function stageFiles(cwd: string, specs: string[]): StagingResult {
 function buildBriefing(params: {
 	question: string;
 	contextNote?: string;
-	consultantNotes?: string;
+	modelNotes?: string;
 	stagedFiles?: StagedFile[];
 	inPlaceFiles?: string[];
 	reframe?: string;
@@ -130,7 +131,7 @@ function buildBriefing(params: {
 	parts.push(
 		"You are a senior software consultant. A local coding agent working on a legitimate software project needs your analysis. This is a one-shot consultation: give your complete answer in a single response.",
 	);
-	if (params.consultantNotes) parts.push(params.consultantNotes);
+	if (params.modelNotes) parts.push(params.modelNotes);
 	if (params.reframe) parts.push(`Context for this material: ${params.reframe}`);
 	if (params.contextNote) parts.push(`Background from the local agent:\n${params.contextNote}`);
 	if (params.stagedFiles && params.stagedFiles.length > 0) {
@@ -174,6 +175,81 @@ interface PrescreenVerdict {
 	screener: string;
 }
 
+/**
+ * Trigger families screened as independent nouls — several may apply at
+ * once, which is why these are not a single choice question.
+ */
+const PRESCREEN_TRIGGER_NOULS = [
+	{
+		id: "t_exploit",
+		label: "exploit-like or offensive-security code",
+		instructions: "Does `files` contain exploit-like or offensive-security code (shellcode, payloads, bypass tooling)?",
+	},
+	{
+		id: "t_re",
+		label: "reverse-engineering artifacts",
+		instructions:
+			"Does `files` contain reverse-engineering artifacts such as decompiled code, binary patches, or protection-bypass material?",
+	},
+	{
+		id: "t_secrets",
+		label: "credentials, keys, or personal data",
+		instructions: "Does `files` contain credentials, API keys, tokens, or personal data?",
+	},
+	{
+		id: "t_prose",
+		label: "policy-sensitive prose",
+		instructions: "Does `files` contain violent, sexual, extremist, or otherwise policy-sensitive prose?",
+	},
+];
+
+/**
+ * Fast prescreen via the System One classifier: one parallel call answers
+ * the calibrated refusal-risk score plus every trigger noul. Returns
+ * undefined (= fall through to the consultant screen) when no judge is
+ * configured or the call fails.
+ */
+async function prescreenWithJudge(
+	cfg: GeocineConfig,
+	files: Array<{ file: string; content: string }>,
+	question: string,
+	signal: AbortSignal | undefined,
+): Promise<PrescreenVerdict | undefined> {
+	const questions: Record<string, JudgeQuestion> = {
+		refusal_risk: {
+			type: "score",
+			instructions:
+				"The `files` are legitimate local software-development content about to be sent to a strict cloud LLM together with `request`. How likely is that model to FALSELY refuse because the content superficially resembles unsafe material?",
+			criteria: [
+				"Benign — nothing resembles unsafe material; a refusal is very unlikely",
+				"Some risky-looking surface (security tooling, RE artifacts, secrets); a false refusal is plausible",
+				"Strongly resembles unsafe material; a strict model will likely refuse",
+			],
+		},
+	};
+	for (const t of PRESCREEN_TRIGGER_NOULS) {
+		questions[t.id] = { type: "noul", instructions: t.instructions };
+	}
+	const result = await judge(cfg.judge, { state: { request: question, files }, questions }, { signal, node: "prescreen" });
+	const risk = scoreOf(result, "refusal_risk");
+	if (!result || !risk) return undefined;
+	// Score is 0..2 over the three levels; thresholds are starting points —
+	// tune against the prescreen records in the consult-log.
+	const riskLevel: PrescreenVerdict["risk"] = risk.score >= 1.4 ? "high" : risk.score >= 0.7 ? "medium" : "low";
+	const triggers = PRESCREEN_TRIGGER_NOULS.map((t) => ({ t, p: noulOf(result, t.id) }))
+		.filter((x) => (x.p ?? 0) >= 0.5)
+		.map((x) => `${x.t.label} (p=${(x.p as number).toFixed(2)})`);
+	return {
+		risk: riskLevel,
+		triggers,
+		// A System One model selects, it does not write — no reframe text.
+		// The consultant path still produces one when it screens instead.
+		raw: JSON.stringify(result.answers).slice(0, 2000),
+		elapsedMs: result.elapsedMs,
+		screener: `judge:${result.model}`,
+	};
+}
+
 async function prescreen(
 	cfg: GeocineConfig,
 	cwd: string,
@@ -181,25 +257,38 @@ async function prescreen(
 	question: string,
 	signal: AbortSignal | undefined,
 ): Promise<PrescreenVerdict> {
-	const screenerName = cfg.prescreen?.consultant;
-	const resolved = screenerName ? resolveConsultant(cfg, screenerName) : undefined;
-	if (!resolved || "error" in resolved) {
-		return { risk: "unknown", triggers: [], raw: "no prescreen consultant configured", elapsedMs: 0, screener: "none" };
-	}
 	const maxBytes = cfg.prescreen?.maxBytes ?? PRESCREEN_DEFAULT_MAX_BYTES;
 	let budget = maxBytes;
-	const excerpts: string[] = [];
+	const files: Array<{ file: string; content: string }> = [];
 	for (const f of staged.files) {
 		if (budget <= 0) break;
 		try {
 			const content = fs.readFileSync(path.join(staged.dir, f.stagedAs), "utf8");
 			const slice = content.slice(0, Math.min(content.length, budget));
 			budget -= slice.length;
-			excerpts.push(`=== ${f.stagedAs} ===\n${slice}`);
+			files.push({ file: f.stagedAs, content: slice });
 		} catch {
 			// staged moments ago; ignore races
 		}
 	}
+
+	// Judge screen first (fast, calibrated, typed); consultant LLM screen
+	// as the fallback; "unknown" when neither is configured.
+	const judged = await prescreenWithJudge(cfg, files, question, signal);
+	if (judged) return judged;
+
+	const screenerName = cfg.prescreen?.model;
+	const resolved = screenerName ? resolveModel(cfg, screenerName) : undefined;
+	if (!resolved || "error" in resolved) {
+		return {
+			risk: "unknown",
+			triggers: [],
+			raw: "no judge or prescreen model configured",
+			elapsedMs: 0,
+			screener: "none",
+		};
+	}
+	const excerpts = files.map((f) => `=== ${f.file} ===\n${f.content}`);
 
 	const prompt = [
 		"You are screening content before it is sent to a strict cloud LLM with aggressive safety guardrails. The work itself is legitimate local software development, but strict models sometimes falsely refuse benign content that superficially resembles unsafe material (exploit-like code, decompiled binaries, credentials, malware artifacts, security tooling).",
@@ -212,8 +301,8 @@ async function prescreen(
 	const t0 = Date.now();
 	const result = await runPi({
 		cwd,
-		provider: resolved.consultant.provider,
-		model: resolved.consultant.model,
+		provider: resolved.model.provider,
+		model: resolved.model.model,
 		tools: [],
 		prompt,
 		timeoutMs: 120_000,
@@ -243,21 +332,77 @@ async function prescreen(
 type Approval = NonNullable<ConsultRequestRecord["approval"]>;
 type ChosenBy = NonNullable<ConsultRequestRecord["chosenBy"]>;
 
-function rosterLine(name: string, c: ConsultantConfig, isDefault: boolean): string {
+function rosterLine(name: string, c: ModelConfig, isDefault: boolean): string {
 	const role = c.role ?? "general consultant";
-	return `${name}${isDefault ? " (default)" : ""} — ${role} [${c.provider ?? "?"}/${c.model}]`;
+	// Classes are the public handles; the map key appears only for
+	// unclassed consultants (nothing else can address them).
+	const handles = c.classes?.length ? c.classes.join(", ") : `@${name}`;
+	return `${c.provider ?? "?"}/${c.model}${isDefault ? " (default)" : ""} {${handles}} — ${role}`;
 }
 
 /**
  * One-line-per-consultant roster, used in the tool description and dialogs.
- * Mode-filtered: only rescuers selectable under the active mode appear.
  */
 export function buildRoster(cfg: GeocineConfig): string {
-	const active = activeMode(cfg);
-	const defaultName = active?.mode.defaultConsultant ?? cfg.defaultConsultant;
-	return Object.entries(modeConsultants(cfg))
+	const defaultName = defaultModelName(cfg);
+	return Object.entries(cfg.models)
 		.map(([n, c]) => rosterLine(n, c, n === defaultName))
 		.join("\n");
+}
+
+/**
+ * Judge-assigned rescuer (the fabric's "route" node): when the model does
+ * not name a class, the judge picks whose ROLE and classes fit the
+ * question — weighing cost (free local consultants when their role covers
+ * the need) and guardrail fit (strict cloud models falsely refuse
+ * RE/exploit-adjacent content). Every consult is routed per task across
+ * the whole roster. Falls back to the static default below minConfidence
+ * or without a judge; the user still owns the final choice at the
+ * approval gate.
+ */
+async function routeModel(
+	cfg: GeocineConfig,
+	question: string,
+	contextNote: string | undefined,
+	files: string[],
+): Promise<string | undefined> {
+	const pool = cfg.models;
+	const names = Object.keys(pool);
+	if (names.length < 2) return undefined;
+	const locals = cfg.rescue?.localProviders ?? DEFAULT_LOCAL_PROVIDERS;
+	const result = await judge(cfg.judge, {
+		state: {
+			question: question.slice(0, 1200),
+			context: contextNote?.slice(0, 400) ?? "(none)",
+			files,
+			models: Object.fromEntries(
+				Object.entries(pool).map(([n, c]) => [
+					n,
+					{
+						role: c.role ?? "general consultant",
+						classes: c.classes ?? [],
+						model: `${c.provider ?? "?"}/${c.model}`,
+						cost: locals.includes(c.provider ?? "") ? "free (local)" : "paid (frontier)",
+						guardrails: c.prescreen
+							? "strict — may falsely refuse sensitive content (RE, exploits, secrets)"
+							: "permissive",
+					},
+				]),
+			),
+		},
+		questions: {
+			rescuer: {
+				type: "choice",
+				instructions:
+					"Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Avoid strict-guardrail models when the content looks likely to trigger a false refusal (reverse engineering, exploit-adjacent code, secrets, sensitive prose) — prefer an abliterated-class one there.",
+				criteria: Object.fromEntries(names.map((n) => [n, pool[n].role ?? null])),
+			},
+		},
+	}, { node: "route" });
+	const pick = choiceOf(result, "rescuer");
+	if (!pick || !pool[pick.choice]) return undefined;
+	if (pick.confidence < (cfg.judge?.minConfidence ?? DEFAULT_MIN_CONFIDENCE)) return undefined;
+	return pick.choice;
 }
 
 interface GateResult {
@@ -265,7 +410,7 @@ interface GateResult {
 	approval: Approval;
 	/** The rescuer that will actually run (may differ from the proposal). */
 	name: string;
-	consultant: ConsultantConfig;
+	model: ModelConfig;
 	chosenBy: ChosenBy;
 }
 
@@ -281,8 +426,8 @@ async function gateConsult(
 	cfg: GeocineConfig,
 	ctx: ExtensionContext,
 	proposedName: string,
-	proposed: ConsultantConfig,
-	proposedBy: "model" | "default",
+	proposed: ModelConfig,
+	proposedBy: "model" | "default" | "judge",
 	question: string,
 	files: string[],
 ): Promise<GateResult> {
@@ -290,7 +435,7 @@ async function gateConsult(
 		approved: true,
 		approval,
 		name: proposedName,
-		consultant: proposed,
+		model: proposed,
 		chosenBy,
 	});
 	if (proposed.autoApprove || cfg.approval?.consultTool === "auto") {
@@ -301,28 +446,31 @@ async function gateConsult(
 		return take("headless", proposedBy);
 	}
 
+	const label = modelLabel(proposed);
 	const items: SelectItem[] = [
 		{
 			value: "use",
-			label: `Use ${proposedName}`,
-			description: proposed.role ?? `${proposed.provider ?? "?"}/${proposed.model}`,
+			label: `Use ${label}`,
+			description: proposed.role ?? (proposed.classes?.join(", ") || "general consultant"),
 		},
 		{ value: "pick", label: "Pick another", description: "override the proposal with a different rescuer" },
 		{ value: "deny", label: "Deny", description: "no consultation — the local model keeps trying on its own" },
 		{
 			value: "always",
-			label: `Always allow ${proposedName}`,
-			description: "persist: this consultant stops asking",
+			label: `Always allow ${label}`,
+			description: "persist: this model stops asking",
 		},
 		{ value: "auto", label: "Auto-approve all", description: "persist: consult tool calls never ask again" },
 	];
+	const proposedLabel =
+		proposedBy === "model" ? " by the model" : proposedBy === "judge" ? " by the judge (role-routed)" : " (default)";
 	const choice = await richSelect(
 		ctx,
-		`Consult approval — ${proposedName} proposed${proposedBy === "model" ? " by the model" : " (default)"}`,
+		`Consult approval — ${label} proposed${proposedLabel}`,
 		items,
 		{
 			header: [
-				`${proposed.provider ?? "?"}/${proposed.model} · jail ${proposed.jail ?? "staged"}`,
+				`{${proposed.classes?.join(", ") || "unclassed"}} · jail ${proposed.jail ?? "staged"}`,
 				`files: ${files.join(", ") || "(none)"}`,
 				`q: ${question.slice(0, 200)}${question.length > 200 ? "…" : ""}`,
 			],
@@ -331,11 +479,12 @@ async function gateConsult(
 
 	if (choice === "use") return take("user_yes", proposedBy);
 	if (choice === "pick") {
-		const pool = modeConsultants(cfg);
+		const pool = cfg.models;
+		const defaultName = defaultModelName(cfg);
 		const rosterItems: SelectItem[] = Object.entries(pool).map(([n, c]) => ({
 			value: n,
-			label: `${n === cfg.defaultConsultant ? "* " : "  "}${n}`,
-			description: `${c.role ?? "general consultant"} — ${c.provider ?? "?"}/${c.model} · ${c.jail ?? "staged"}`,
+			label: `${n === defaultName ? "* " : "  "}${modelLabel(c)}`,
+			description: `${c.role ?? "general consultant"} — {${c.classes?.join(", ") || "unclassed"}} · ${c.jail ?? "staged"}`,
 		}));
 		const name = await richSelect(ctx, "Who should rescue this?", rosterItems);
 		if (!name) return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
@@ -343,20 +492,20 @@ async function gateConsult(
 			approved: true,
 			approval: "user_yes",
 			name,
-			consultant: pool[name],
+			model: pool[name],
 			chosenBy: name === proposedName ? proposedBy : "user_override",
 		};
 	}
 	if (choice === "always") {
 		updateGlobalConfig((g) => {
-			const existing = g.consultants?.[proposedName];
+			const existing = g.models?.[proposedName];
 			if (existing) existing.autoApprove = true;
 			else {
-				g.consultants = g.consultants ?? {};
-				g.consultants[proposedName] = { ...proposed, autoApprove: true };
+				g.models = g.models ?? {};
+				g.models[proposedName] = { ...proposed, autoApprove: true };
 			}
 		});
-		ctx.ui.notify(`"${proposedName}" is now auto-approved (geocine.json).`, "info");
+		ctx.ui.notify(`${label} is now auto-approved (geocine.json).`, "info");
 		return take("always_allow", proposedBy);
 	}
 	if (choice === "auto") {
@@ -385,8 +534,8 @@ async function consult(
 	ctx: ExtensionContext,
 	cid: string,
 	source: "tool" | "command",
-	consultantName: string,
-	consultant: ConsultantConfig,
+	modelName: string,
+	model: ModelConfig,
 	question: string,
 	fileSpecs: string[],
 	contextNote: string | undefined,
@@ -399,13 +548,13 @@ async function consult(
 	const dir = logDir(cfg);
 	const cwd = ctx.cwd;
 	const base = { cid, cwd, mainModel: mainModelId(ctx) };
-	const jail = consultant.jail ?? "staged";
+	const jail = model.jail ?? "staged";
 
 	appendRecord(dir, {
 		type: "consult_request",
 		...base,
 		ts: nowIso(),
-		consultant: consultantName,
+		consultant: modelName,
 		source,
 		question,
 		files: fileSpecs,
@@ -413,7 +562,6 @@ async function consult(
 		approval,
 		proposedConsultant: routing?.proposedConsultant,
 		chosenBy: routing?.chosenBy,
-		mode: activeMode(cfg)?.name,
 	});
 
 	// 1. Stage (context firewall) unless running in place.
@@ -424,7 +572,7 @@ async function consult(
 			type: "staging",
 			...base,
 			ts: nowIso(),
-			consultant: consultantName,
+			consultant: modelName,
 			jail,
 			files: staging.files,
 			totalBytes: staging.totalBytes,
@@ -438,18 +586,17 @@ async function consult(
 	// into reviewing the absence of files instead of the question).
 	const noWorkspace = staging !== undefined && staging.files.length === 0;
 
-	// 2. Pre-screen. The active mode's policy wins ("force" screens every
-	// staged consult, "skip" screens none); otherwise the per-consultant
-	// flag decides. Nothing to screen when no files were staged.
+	// 2. Pre-screen when the consultant's flag asks for it. Nothing to
+	// screen when no files were staged.
 	let reframe: string | undefined;
-	if (shouldPrescreen(cfg, consultant) && staging && !noWorkspace) {
+	if (shouldPrescreen(model) && staging && !noWorkspace) {
 		notify(`consult: pre-screening ${staging.files.length} staged file(s) locally…`);
 		const verdict = await prescreen(cfg, cwd, staging, question, signal);
 		appendRecord(dir, {
 			type: "prescreen",
 			...base,
 			ts: nowIso(),
-			consultant: consultantName,
+			consultant: modelName,
 			screener: verdict.screener,
 			risk: verdict.risk,
 			triggers: verdict.triggers,
@@ -461,14 +608,14 @@ async function consult(
 			cleanupStaging(staging);
 			// Suggest consultants this content CAN go to: jail "none" ones
 			// never stage (so never screen), plus unscreened staged ones.
-			const lenient = Object.entries(modeConsultants(cfg))
-				.filter(([n, c]) => n !== consultantName && ((c.jail ?? "staged") === "none" || !shouldPrescreen(cfg, c)))
+			const lenient = Object.entries(cfg.models)
+				.filter(([n, c]) => n !== modelName && ((c.jail ?? "staged") === "none" || !shouldPrescreen(c)))
 				.map(([n]) => n);
 			return {
 				note:
-					`Consultation NOT sent: the local pre-screen judged this content HIGH risk for a false safety refusal by "${consultantName}".\n` +
+					`Consultation NOT sent: the local pre-screen judged this content HIGH risk for a false safety refusal by "${modelName}".\n` +
 					`Likely triggers: ${verdict.triggers.join("; ") || "unspecified"}.\n` +
-					`Use a lenient consultant instead${lenient.length ? ` (available: ${lenient.join(", ")})` : ""}, or reduce the staged content and retry.`,
+					`Use a lenient model instead${lenient.length ? ` (available: ${lenient.join(", ")})` : ""}, or reduce the staged content and retry.`,
 				refused: false,
 				result: emptyResult(),
 				staging,
@@ -482,7 +629,7 @@ async function consult(
 	const briefing = buildBriefing({
 		question,
 		contextNote,
-		consultantNotes: consultant.notes,
+		modelNotes: model.notes,
 		stagedFiles: staging?.files,
 		inPlaceFiles: jail === "none" ? fileSpecs : undefined,
 		reframe,
@@ -490,12 +637,12 @@ async function consult(
 	});
 
 	const runCwd = staging ? staging.dir : cwd;
-	notify(`consult: asking ${consultantName} (${consultant.model})…`);
+	notify(`consult: asking ${modelLabel(model)}…`);
 	const result = await runPi({
 		cwd: runCwd,
-		provider: consultant.provider,
-		model: consultant.model,
-		thinking: consultant.thinking,
+		provider: model.provider,
+		model: model.model,
+		thinking: model.thinking,
 		tools: noWorkspace ? [] : READ_ONLY_TOOLS,
 		prompt: briefing,
 		timeoutMs: 900_000,
@@ -503,7 +650,7 @@ async function consult(
 		onProgress,
 		docker:
 			jail === "docker"
-				? { image: cfg.docker?.image ?? "geocine-consult", envKeys: consultant.envKeys }
+				? { image: cfg.docker?.image ?? "geocine-consult", envKeys: model.envKeys }
 				: undefined,
 	});
 
@@ -520,7 +667,7 @@ async function consult(
 		type: "consult_result",
 		...base,
 		ts: nowIso(),
-		consultant: consultantName,
+		consultant: modelName,
 		jail,
 		exitCode: result.exitCode,
 		refusalSuspected: refused,
@@ -538,11 +685,11 @@ async function consult(
 		note = `Consultation failed (exit ${result.exitCode}, timedOut=${result.timedOut}). stderr:\n${result.stderr.slice(0, 1500) || "(empty)"}`;
 	} else if (refused) {
 		note =
-			`Consultant "${consultantName}" appears to have REFUSED (guardrail false positive is likely — this exchange will not be continued).\n` +
+			`Model "${modelName}" appears to have REFUSED (guardrail false positive is likely — this exchange will not be continued).\n` +
 			`Its reply:\n${result.finalText.slice(0, 1200)}\n\n` +
-			`Options: retry with less/reframed content, or use a lenient consultant.`;
+			`Options: retry with less/reframed content, or use a lenient model.`;
 	} else {
-		note = `[advisory from ${consultantName}]\n${result.finalText}`;
+		note = `[advisory from ${modelName}]\n${result.finalText}`;
 	}
 
 	if (staging) cleanupStaging(staging);
@@ -580,19 +727,19 @@ export default function advisor(pi: ExtensionAPI) {
 		name: "consult",
 		label: "Consult",
 		description:
-			"Ask a stronger consultant model for advice when stuck, when a plan is needed for a hard task, or after repeated failed attempts. Stage ONLY the files needed to answer the question: the consultant can read nothing else, and staged bytes are the cost of the call. Returns one advisory note.\n" +
-			"Pick the consultant whose role fits the problem:\n" +
-			(rosterAtLoad || "(no consultants configured)") +
+			"Ask a stronger model for advice when stuck, when a plan is needed for a hard task, or after repeated failed attempts. Stage ONLY the files needed to answer the question: the consulted model can read nothing else, and staged bytes are the cost of the call. Returns one advisory note.\n" +
+			"Pick the model (by capability class) whose role fits the problem:\n" +
+			(rosterAtLoad || "(no models configured)") +
 			"\nThe active session mode may narrow this set; an unavailable name returns an error listing who is available.",
 		promptSnippet: "Consult a stronger model with a question plus a minimal set of relevant files",
 		promptGuidelines: [
 			"Use consult after several failed attempts at the same problem, before trying the same approach again.",
-			"When calling consult, stage the minimum files that let the consultant answer — every staged byte costs tokens.",
-			"Propose the consultant whose role matches the problem (debugging vs planning vs sensitive content); the user confirms or overrides.",
+			"When calling consult, stage the minimum files that let the consulted model answer — every staged byte costs tokens.",
+			"Propose the model class that matches the problem (debugging vs planning vs sensitive content); the user confirms or overrides.",
 		],
 		parameters: Type.Object({
 			question: Type.String({
-				description: "The specific question. Include what was tried and what failed — the consultant sees nothing else.",
+				description: "The specific question. Include what was tried and what failed — the consulted model sees nothing else.",
 			}),
 			files: Type.Optional(
 				Type.Array(Type.String(), {
@@ -602,30 +749,41 @@ export default function advisor(pi: ExtensionAPI) {
 			context: Type.Optional(
 				Type.String({ description: "Short background note: goal, constraints, what has been ruled out." }),
 			),
-			consultant: Type.Optional(
+			model: Type.Optional(
 				Type.String({
 					description:
-						"Proposed rescuer: the consultant name whose role best fits this problem (see tool description). Omit for the default.",
+						"Proposed rescuer as a capability class (frontier, cheap, fast, local, abliterated, intelligent — see the {braces} in the roster); it resolves to a model carrying that class. Omit to let the router assign one by role and cost.",
 				}),
 			),
 		}),
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const cfg = loadConfig(ctx.cwd);
-			const resolved = resolveRescuer(cfg, params.consultant);
+			// Routing: an explicit model proposal stands; otherwise the judge
+			// assigns by role/cost/guardrail fit, and only then the static
+			// default.
+			let proposedBy: "model" | "default" | "judge" = params.model ? "model" : "default";
+			let wanted = params.model;
+			if (!wanted) {
+				const routed = await routeModel(cfg, params.question, params.context, params.files ?? []);
+				if (routed) {
+					wanted = routed;
+					proposedBy = "judge";
+				}
+			}
+			const resolved = resolveModel(cfg, wanted);
 			if ("error" in resolved) {
 				return { content: [{ type: "text", text: resolved.error }], details: {} };
 			}
 			const cid = newCid();
 
-			// Rescuer selection + permission gate: the model proposed a
-			// rescuer (or the default applies); the user confirms, overrides,
-			// or rejects.
+			// Rescuer selection + permission gate: the user confirms,
+			// overrides, or rejects the proposal.
 			const gate = await gateConsult(
 				cfg,
 				ctx,
 				resolved.name,
-				resolved.consultant,
-				params.consultant ? "model" : "default",
+				resolved.model,
+				proposedBy,
 				params.question,
 				params.files ?? [],
 			);
@@ -644,7 +802,7 @@ export default function advisor(pi: ExtensionAPI) {
 					contextNote: params.context,
 					approval: "user_no",
 					proposedConsultant: resolved.name,
-					chosenBy: params.consultant ? "model" : "default",
+					chosenBy: proposedBy,
 				});
 				return {
 					content: [
@@ -657,11 +815,12 @@ export default function advisor(pi: ExtensionAPI) {
 				};
 			}
 			if (gate.name !== resolved.name) {
-				ctx.ui.notify(`Rescuer overridden: ${resolved.name} → ${gate.name}`, "info");
+				ctx.ui.notify(`Rescuer overridden: ${modelLabel(resolved.model)} → ${modelLabel(gate.model)}`, "info");
 			}
 
 			// Stream the consultant's thinking/answer into the tool display
 			// so the wait is observable instead of a spinner.
+			const gateLabel = modelLabel(gate.model);
 			const streamProgress = onUpdate
 				? (p: PiProgress) => {
 						const body =
@@ -671,7 +830,7 @@ export default function advisor(pi: ExtensionAPI) {
 									? `…${p.text.slice(-1500)}`
 									: p.text;
 						onUpdate({
-							content: [{ type: "text", text: `[${gate.name} · turn ${p.turn} · ${p.phase}]\n${body}` }],
+							content: [{ type: "text", text: `[${gateLabel} · turn ${p.turn} · ${p.phase}]\n${body}` }],
 							details: { cid, consultant: gate.name, streaming: true },
 						});
 					}
@@ -682,7 +841,7 @@ export default function advisor(pi: ExtensionAPI) {
 				cid,
 				"tool",
 				gate.name,
-				gate.consultant,
+				gate.model,
 				params.question,
 				params.files ?? [],
 				params.context,
@@ -709,18 +868,18 @@ export default function advisor(pi: ExtensionAPI) {
 
 	pi.registerCommand("consult", {
 		description:
-			'Consult a stronger model: /consult [@consultant] [+file[:a-b] …] <question>. "+" tokens stage files for the consultant (e.g. +docs/outline.md +src/foo.ts:40-120); without them a staged-jail consultant answers from the question alone.',
+			'Consult a stronger model: /consult [@model|@class] [+file[:a-b] …] <question>. "+" tokens stage files for the consulted model (e.g. +docs/outline.md +src/foo.ts:40-120); without them a staged-jail model answers from the question alone.',
 		handler: async (args, ctx) => {
 			const raw = String(args ?? "").trim();
 			if (!raw) {
-				ctx.ui.notify("Usage: /consult [@consultant] [+file[:a-b] …] <question>", "error");
+				ctx.ui.notify("Usage: /consult [@model|@class] [+file[:a-b] …] <question>", "error");
 				return;
 			}
-			let consultantName: string | undefined;
+			let modelName: string | undefined;
 			let question = raw;
 			const at = /^@(\S+)\s+([\s\S]+)$/.exec(raw);
 			if (at) {
-				consultantName = at[1];
+				modelName = at[1];
 				question = at[2];
 			}
 			// "+path" tokens anywhere in the question are file specs to stage.
@@ -733,18 +892,19 @@ export default function advisor(pi: ExtensionAPI) {
 				.replace(/\s+/g, " ")
 				.trim();
 			if (!question) {
-				ctx.ui.notify("Usage: /consult [@consultant] [+file[:a-b] …] <question> — a question is required.", "error");
+				ctx.ui.notify("Usage: /consult [@model|@class] [+file[:a-b] …] <question> — a question is required.", "error");
 				return;
 			}
 			const cfg = loadConfig(ctx.cwd);
-			const resolved = resolveRescuer(cfg, consultantName);
+			const resolved = resolveModel(cfg, modelName);
 			if ("error" in resolved) {
 				ctx.ui.notify(resolved.error, "error");
 				return;
 			}
 			const cid = newCid();
+			const label = modelLabel(resolved.model);
 			ctx.ui.notify(
-				`Consulting ${resolved.name}${fileSpecs.length ? ` (staging ${fileSpecs.length} file(s))` : ""}…`,
+				`Consulting ${label}${fileSpecs.length ? ` (staging ${fileSpecs.length} file(s))` : ""}…`,
 				"info",
 			);
 			const outcome = await consult(
@@ -753,7 +913,7 @@ export default function advisor(pi: ExtensionAPI) {
 				cid,
 				"command",
 				resolved.name,
-				resolved.consultant,
+				resolved.model,
 				question,
 				fileSpecs,
 				undefined,
@@ -764,46 +924,38 @@ export default function advisor(pi: ExtensionAPI) {
 				// Stream the consultant's live thinking/answer into the footer.
 				(p) => {
 					const tail = p.text.replace(/\s+/g, " ").trim().slice(-90);
-					ctx.ui.setStatus("advisor", `${resolved.name} · ${p.phase}${p.phase === "tool" ? ` ${p.text}` : `: …${tail}`}`);
+					ctx.ui.setStatus("advisor", `${label} · ${p.phase}${p.phase === "tool" ? ` ${p.text}` : `: …${tail}`}`);
 				},
 			);
 			ctx.ui.setStatus("advisor", undefined);
 			// Deliver the advisory into the worker transcript so the model sees it.
 			pi.sendUserMessage(
-				`Advisory note from consultant "${resolved.name}" (requested by the user):\n\n${outcome.note}`,
+				`Advisory note from ${label} (requested by the user):\n\n${outcome.note}`,
 			);
 		},
 	});
 
-	pi.registerCommand("consultants", {
-		description: "List configured consultants and advisor status",
+	pi.registerCommand("models", {
+		description: "List configured models and advisor status",
 		handler: async (_args, ctx) => {
 			const cfg = loadConfig(ctx.cwd);
-			const names = Object.entries(cfg.consultants);
+			const names = Object.entries(cfg.models);
 			if (names.length === 0) {
-				ctx.ui.notify("No consultants configured. See geocine.example.json in the geocine-pi package.", "error");
+				ctx.ui.notify("No models configured. See geocine.example.json in the geocine-pi package.", "error");
 				return;
 			}
-			const active = activeMode(cfg);
-			const pool = modeConsultants(cfg);
-			const defaultName = active?.mode.defaultConsultant ?? cfg.defaultConsultant;
+			const defaultName = defaultModelName(cfg);
 			const lines = names.map(([name, c]) => {
 				const flags = [
 					c.jail ?? "staged",
-					shouldPrescreen(cfg, c) ? "prescreen" : "direct",
+					shouldPrescreen(c) ? "prescreen" : "direct",
 					c.autoApprove ? "auto-approved" : "",
 					name === defaultName ? "DEFAULT" : "",
-					active && !pool[name] ? `unavailable in mode "${active.name}"` : "",
 				]
 					.filter(Boolean)
 					.join(", ");
-				return `${name}: ${c.provider ?? "?"}/${c.model} (${flags})${c.role ? ` — ${c.role}` : ""}`;
+				return `${modelLabel(c)} {${c.classes?.join(", ") || "unclassed"}} (${flags})${c.role ? ` — ${c.role}` : ""}`;
 			});
-			if (active) {
-				lines.unshift(
-					`mode: ${active.name}${active.mode.description ? ` — ${active.mode.description}` : ""} (prescreen: ${active.mode.prescreen ?? "consultant"})`,
-				);
-			}
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});

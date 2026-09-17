@@ -745,16 +745,16 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		}
 
 		// --- checkpoint mode: LLM-written structured checkpoint ---
-		// Summarizer: a named consultant's model, or the session's own model
+		// Summarizer: a named registry entry's model, or the session's own model
 		// (which keeps the call on the warm KV cache of a local server).
 		let model = ctx.model;
 		let summarizerName = mainModelId(ctx) ?? "main";
 		if (cfg.summarizer) {
-			const consultant = loadConfig(ctx.cwd).consultants[cfg.summarizer];
-			const found = consultant?.provider ? ctx.modelRegistry.find(consultant.provider, consultant.model) : undefined;
+			const entry = loadConfig(ctx.cwd).models[cfg.summarizer];
+			const found = entry?.provider ? ctx.modelRegistry.find(entry.provider, entry.model) : undefined;
 			if (found) {
 				model = found;
-				summarizerName = `${consultant.provider}/${consultant.model}`;
+				summarizerName = `${entry.provider}/${entry.model}`;
 			} else {
 				ctx.ui.notify(`context.summarizer "${cfg.summarizer}" not resolvable; using session model`, "warning");
 			}

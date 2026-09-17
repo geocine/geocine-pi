@@ -3,6 +3,19 @@
 // Tier 0 — deterministic counters (always on, zero cost, ~zero false
 //   positives): repeated identical tool calls, same command failing
 //   repeatedly, long error streaks.
+// Judge — optional System One classifier verdict (config: judge block,
+//   lib/judge). A calibrated typed choice in ~100-500ms. By default it
+//   runs EVERY turn with new tool activity (watchdog.judgeEveryTurn,
+//   default true) — the only way drift gets detected, since no counter can
+//   see it; judge-only findings need judge.minConfidence to act. When a
+//   counter fired, the judge verifies: its confident "ok" overrules the
+//   counter (confidence-gated routing), non-ok refines the verdict label.
+//   Unavailable/timeout = silently fall through to Tier 1. The same call
+//   carries the mid-task escalate-now noul (triage config): judged against
+//   session stage (invested tokens, cache warmth), a high probability
+//   suggests handing the task to the frontier rescuer — even on quiet
+//   turns, since grinding without errors on a too-hard task never trips a
+//   counter. Task-START routing lives in triage.ts.
 // Tier 1 — optional low-context LLM verdict from a SECOND small model
 //   (config: watchdog.baseUrl / watchdog.model). Never point this at the
 //   same single-slot llama.cpp server as the main model: the side request
@@ -19,8 +32,17 @@
 
 import * as crypto from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadConfig, logDir } from "../lib/config.ts";
+import { modelHandle, isLocalWorker, loadConfig, logDir, resolveModel } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
+import {
+	choiceOf,
+	DEFAULT_MIN_CONFIDENCE,
+	judge,
+	type JudgeQuestion,
+	judgeStatus,
+	noulOf,
+	resolveJudge,
+} from "../lib/judge/index.ts";
 
 interface ToolEventSummary {
 	name: string;
@@ -164,6 +186,11 @@ export default function watchdog(pi: ExtensionAPI) {
 	let lastUserMessage = "";
 	let incidentHints = new Map<string, number>();
 	let currentCid: string | undefined;
+	// Every-turn judging bookkeeping: only judge when there is new tool
+	// activity since the last judge call (idle turns have nothing to judge).
+	let toolEventsSeen = 0;
+	let lastJudgedEvents = 0;
+	let lastEscalateTurn = -999;
 
 	const reset = () => {
 		ring = [];
@@ -171,6 +198,9 @@ export default function watchdog(pi: ExtensionAPI) {
 		lastHintTurn = -999;
 		incidentHints = new Map();
 		currentCid = undefined;
+		toolEventsSeen = 0;
+		lastJudgedEvents = 0;
+		lastEscalateTurn = -999;
 	};
 
 	function digestText(ctx: ExtensionContext): string {
@@ -207,6 +237,7 @@ export default function watchdog(pi: ExtensionAPI) {
 		};
 		ring.push(summary);
 		if (ring.length > RING_SIZE) ring.shift();
+		toolEventsSeen++;
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
@@ -217,30 +248,129 @@ export default function watchdog(pi: ExtensionAPI) {
 		if (wd.enabled === false) return;
 
 		const tier0 = evaluateTier0(ring, wd.loopThreshold ?? 3, wd.failStreakThreshold ?? 3);
-		if (tier0.verdict === "ok") {
+		const counterVerdict = tier0.verdict === "ok" ? undefined : tier0.verdict;
+
+		// Every-turn judging (default when a judge is configured): each turn
+		// with new tool activity gets a verdict, not only turns where a
+		// counter fired — this is what makes drift detectable at all, and
+		// System One calls are fast/cheap enough to afford it. Set
+		// watchdog.judgeEveryTurn: false for verify-only judging.
+		const everyTurn = wd.judgeEveryTurn !== false && resolveJudge(cfg.judge) !== undefined;
+		if (!counterVerdict) {
 			ctx.ui.setStatus("watchdog", undefined);
-			return;
+			if (!everyTurn) return;
+			// A routine check needs something new to look at.
+			if (ring.length < 3 || toolEventsSeen === lastJudgedEvents) return;
 		}
 
 		const cooldown = wd.hintCooldownTurns ?? 4;
 		if (turnIndex - lastHintTurn < cooldown) return;
 
-		// Tier 1: confirm with the small LLM when configured.
-		let verdict: "loop" | "stuck" | "drift" = tier0.verdict;
-		let reason = tier0.reason;
-		let tier: 0 | 1 = 0;
+		// Resolve a finding: judge (fast, calibrated) first, then the
+		// small-LLM tier as counter verification. Either may overrule a
+		// counter to "ok" or refine its label.
+		let finding: { verdict: "loop" | "stuck" | "drift"; reason: string; incidentKey: string } | undefined;
+		let tier: 0 | 1 | "judge" = 0;
 		const digest = digestText(ctx);
-		if (wd.baseUrl) {
-			const llm = await tier1Verdict(
-				wd.baseUrl,
-				wd.model,
-				wd.apiKeyEnv ? process.env[wd.apiKeyEnv] : undefined,
-				digest,
-			);
-			if (llm) {
-				tier = 1;
-				if (llm.verdict === "ok") {
-					// LLM overrules the counter — log the disagreement, no hint.
+		const minConfidence = cfg.judge?.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
+
+		const usage = ctx.getContextUsage();
+		const window = (ctx.model as { contextWindow?: number } | undefined)?.contextWindow;
+		const questions: Record<string, JudgeQuestion> = {
+			verdict: {
+				type: "choice",
+				instructions:
+					"You are watching a coding agent's recent activity (`heuristic_signal` says whether a deterministic counter flagged it). Judge from `recent_tool_calls` whether there is a real failure pattern or normal progress on `task`.",
+				criteria: {
+					ok: "Normal progress, including ordinary debugging",
+					loop: "Repeating the same action expecting different results",
+					stuck: "Repeated failures without a strategy change",
+					drift: "Activity no longer serves the stated task",
+				},
+			},
+		};
+		// The escalate-now check rides the same call (parallel questions are
+		// one request — near-free). It is the mid-task half of triage, and
+		// like triage it only applies while the cheap local worker is
+		// active: a frontier main model gets no escalate suggestions.
+		if (cfg.triage?.enabled !== false && isLocalWorker(ctx.model, cfg)) {
+			questions.escalate = {
+				type: "noul",
+				instructions:
+					"Would handing `task` to a much stronger frontier-class model RIGHT NOW likely produce a better outcome than the local model continuing? Weigh the economics from `session_stage` and `recent_tool_calls`: continuing locally is cheap while progress is normal (warm cache, no handoff cost); escalating pays when the work exceeds local capability or attempts keep failing. A high `context_pct` means much invested state a handoff brief would lose.",
+				criteria: {
+					true: "Escalate now — a frontier consult would resolve this faster or catch what the local model cannot",
+					false: "Keep local — normal progress, or escalation would not pay for its handoff cost",
+				},
+			};
+		}
+		const judged = await judge(cfg.judge, {
+			state: {
+				task: lastUserMessage.slice(0, 300) || "(unknown)",
+				heuristic_signal: counterVerdict
+					? tier0.reason
+					: "none — routine every-turn check, no counter fired",
+				recent_tool_calls: ring.slice(-12).map((e) => ({ status: e.isError ? "failed" : "ok", call: e.preview })),
+				session_stage: {
+					turn: turnIndex,
+					context_tokens: usage?.tokens ?? 0,
+					context_pct: usage?.tokens != null && window ? Math.round((usage.tokens / window) * 100) : 0,
+				},
+			},
+			questions,
+		}, { node: "watchdog" });
+		lastJudgedEvents = toolEventsSeen;
+		const escalateP = noulOf(judged, "escalate");
+		const judgedVerdict = choiceOf(judged, "verdict");
+		if (judgedVerdict && ["ok", "loop", "stuck", "drift"].includes(judgedVerdict.choice)) {
+			tier = "judge";
+			const conf = judgedVerdict.confidence.toFixed(2);
+			if (judgedVerdict.choice === "ok") {
+				// Quiet turn with no failure finding — but the escalate check
+				// can still fire: grinding without errors on a task beyond
+				// local capability looks exactly like this.
+				if (!counterVerdict) {
+					const threshold = cfg.triage?.escalateThreshold ?? 0.75;
+					const escalateCooldown = cfg.triage?.cooldownTurns ?? 8;
+					if (
+						escalateP !== undefined &&
+						escalateP >= threshold &&
+						turnIndex - lastEscalateTurn >= escalateCooldown &&
+						wd.sendHints !== false
+					) {
+						const rescuer = resolveModel(cfg);
+						const name = "error" in rescuer ? undefined : rescuer.name;
+						const handle = name ? modelHandle(cfg, name) : undefined;
+						const role = "error" in rescuer || !rescuer.model.role ? "" : ` (${rescuer.model.role})`;
+						try {
+							pi.sendUserMessage(
+								`[watchdog] Escalation check: handing this to a stronger model now looks better than continuing locally (p=${escalateP.toFixed(2)}). Consider the consult tool${handle ? ` with the "${handle}" rescuer${role}` : ""}: stage the key files and ask for a diagnosis or plan.`,
+								ctx.isIdle() ? undefined : { deliverAs: "steer" },
+							);
+							lastEscalateTurn = turnIndex;
+							lastHintTurn = turnIndex;
+							appendRecord(logDir(cfg), {
+								type: "watchdog",
+								cid: currentCid ?? (currentCid = newCid()),
+								ts: nowIso(),
+								cwd: ctx.cwd,
+								tier,
+								verdict: "ok",
+								reason: `escalation check fired without a failure finding (p=${escalateP.toFixed(2)})`,
+								digest,
+								hintSent: true,
+								turnIndex,
+								escalateP,
+							});
+						} catch {
+							// delivery constraints changed; retry next eligible turn
+						}
+					}
+					return;
+				}
+				// Overruling a counter requires confidence; a hesitant "ok"
+				// leaves the deterministic verdict standing.
+				if (judgedVerdict.confidence >= minConfidence) {
 					appendRecord(logDir(cfg), {
 						type: "watchdog",
 						cid: currentCid ?? (currentCid = newCid()),
@@ -248,20 +378,72 @@ export default function watchdog(pi: ExtensionAPI) {
 						cwd: ctx.cwd,
 						tier,
 						verdict: "ok",
-						reason: `tier0 said ${tier0.verdict} (${tier0.reason}); tier1 overruled: ${llm.reason}`,
+						reason: `tier0 said ${tier0.verdict} (${tier0.reason}); judge overruled with confidence ${conf}`,
 						digest,
 						hintSent: false,
 						turnIndex,
+						escalateP,
 					});
 					return;
 				}
-				verdict = llm.verdict;
-				reason = llm.reason || tier0.reason;
+				finding = { verdict: counterVerdict, reason: tier0.reason, incidentKey: tier0.incidentKey };
+			} else {
+				const judgeVerdict = judgedVerdict.choice as "loop" | "stuck" | "drift";
+				// With no counter behind it the judge is the sole accuser —
+				// the same confidence floor gates the accusation.
+				if (!counterVerdict && judgedVerdict.confidence < minConfidence) return;
+				finding = counterVerdict
+					? {
+							verdict: judgeVerdict,
+							reason: `${tier0.reason} (judge: ${judgeVerdict}, confidence ${conf})`,
+							incidentKey: tier0.incidentKey,
+						}
+					: {
+							verdict: judgeVerdict,
+							reason: `the judge classifier flagged ${judgeVerdict} across the recent tool calls (confidence ${conf}; no counter fired)`,
+							incidentKey: `judge:${judgeVerdict}`,
+						};
+			}
+		} else if (!counterVerdict) {
+			// Routine check with no judge answer: nothing to act on.
+			return;
+		} else {
+			finding = { verdict: counterVerdict, reason: tier0.reason, incidentKey: tier0.incidentKey };
+			if (wd.baseUrl) {
+				const llm = await tier1Verdict(
+					wd.baseUrl,
+					wd.model,
+					wd.apiKeyEnv ? process.env[wd.apiKeyEnv] : undefined,
+					digest,
+				);
+				if (llm) {
+					tier = 1;
+					if (llm.verdict === "ok") {
+						// LLM overrules the counter — log the disagreement, no hint.
+						appendRecord(logDir(cfg), {
+							type: "watchdog",
+							cid: currentCid ?? (currentCid = newCid()),
+							ts: nowIso(),
+							cwd: ctx.cwd,
+							tier,
+							verdict: "ok",
+							reason: `tier0 said ${tier0.verdict} (${tier0.reason}); tier1 overruled: ${llm.reason}`,
+							digest,
+							hintSent: false,
+							turnIndex,
+							escalateP,
+						});
+						return;
+					}
+					finding = { verdict: llm.verdict, reason: llm.reason || tier0.reason, incidentKey: tier0.incidentKey };
+				}
 			}
 		}
+		if (!finding) return;
+		const { verdict, reason, incidentKey } = finding;
 
 		currentCid ??= newCid();
-		const hintsSoFar = incidentHints.get(tier0.incidentKey) ?? 0;
+		const hintsSoFar = incidentHints.get(incidentKey) ?? 0;
 		const sendHints = wd.sendHints !== false;
 		let hintSent = false;
 
@@ -274,11 +456,15 @@ export default function watchdog(pi: ExtensionAPI) {
 				hint +=
 					` This is repeat detection #${hintsSoFar + 1} for the same issue — consider the consult tool now: stage the relevant files and ask for a diagnosis instead of retrying.`;
 			}
+			if (escalateP !== undefined && escalateP >= (cfg.triage?.escalateThreshold ?? 0.75)) {
+				hint += ` The escalation check agrees a consult now beats another local attempt (p=${escalateP.toFixed(2)}).`;
+				lastEscalateTurn = turnIndex;
+			}
 			try {
 				pi.sendUserMessage(hint, ctx.isIdle() ? undefined : { deliverAs: "steer" });
 				hintSent = true;
 				lastHintTurn = turnIndex;
-				incidentHints.set(tier0.incidentKey, hintsSoFar + 1);
+				incidentHints.set(incidentKey, hintsSoFar + 1);
 			} catch {
 				// delivery constraints changed mid-turn; skip this round
 			}
@@ -297,6 +483,7 @@ export default function watchdog(pi: ExtensionAPI) {
 			digest,
 			hintSent,
 			turnIndex,
+			escalateP,
 		});
 	});
 
@@ -311,10 +498,13 @@ export default function watchdog(pi: ExtensionAPI) {
 			}
 			const cfg = loadConfig(ctx.cwd);
 			const wd = cfg.watchdog ?? {};
+			const judgeReady = resolveJudge(cfg.judge) !== undefined;
+			const cadence = !judgeReady ? "" : wd.judgeEveryTurn !== false ? " · every-turn" : " · verify-only";
 			ctx.ui.notify(
 				[
 					`watchdog: ${enabled && wd.enabled !== false ? "ON" : "OFF"}`,
-					`tier1 endpoint: ${wd.baseUrl ?? "(none — tier 0 counters only)"}`,
+					`judge: ${judgeStatus(cfg.judge)}${cadence}`,
+					`tier1 endpoint: ${wd.baseUrl ?? "(none)"}`,
 					`hints: ${wd.sendHints !== false ? "on" : "off"}, cooldown ${wd.hintCooldownTurns ?? 4} turns`,
 					`ring: ${ring.length} recent tool calls tracked`,
 				].join("\n"),

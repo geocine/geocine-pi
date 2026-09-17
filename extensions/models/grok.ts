@@ -1,5 +1,5 @@
 // Grok model harness: xAI models (grok-*), used here both interactively and
-// as the "frontier" consultant via OAuth.
+// as the "frontier" model via OAuth.
 //
 // Trained dialect verified against D:\PL\coding-agents\grok-build (default
 // GrokBuild toolset in xai-grok-agent/src/config.rs, wire names after

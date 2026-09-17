@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type GeocineConfig, logDir, resolveConsultant } from "./config.ts";
+import { type GeocineConfig, logDir, resolveModel } from "./config.ts";
 import type { RescueRecord } from "./consult-log.ts";
 import { runPi } from "./pi-exec.ts";
 
@@ -53,9 +53,9 @@ export async function distillRescue(
 	record: RescueRecord,
 	cwd: string,
 ): Promise<DistillOutcome> {
-	const distillName = cfg.rescue?.distillConsultant ?? cfg.prescreen?.consultant;
-	const resolved = resolveConsultant(cfg, distillName);
-	if ("error" in resolved) return { ok: false, message: `No distill consultant available: ${resolved.error}` };
+	const distillName = cfg.rescue?.distillModel ?? cfg.prescreen?.model;
+	const resolved = resolveModel(cfg, distillName);
+	if ("error" in resolved) return { ok: false, message: `No distill model available: ${resolved.error}` };
 
 	const prompt = [
 		"A weak local coding model failed at a task; a stronger model was brought in and fixed it. From the evidence below, write ONE transferable lesson the weak model could apply next time, as markdown:",
@@ -79,8 +79,8 @@ export async function distillRescue(
 
 	const result = await runPi({
 		cwd,
-		provider: resolved.consultant.provider,
-		model: resolved.consultant.model,
+		provider: resolved.model.provider,
+		model: resolved.model.model,
 		tools: [],
 		prompt,
 		timeoutMs: 180_000,

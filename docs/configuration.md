@@ -1,7 +1,7 @@
 # Configuration
 
 One file rules everything: `~/.pi/agent/geocine.json` (global), optionally
-overridden by `.pi/geocine.json` in a project (shallow merge, consultants
+overridden by `.pi/geocine.json` in a project (shallow merge, models
 merged by name). Start from
 [`geocine.example.json`](../geocine.example.json):
 
@@ -12,97 +12,362 @@ cp geocine.example.json ~/.pi/agent/geocine.json   # and edit
 Extensions re-read the config on every event, so edits apply immediately —
 no reload. `/geocine config` edits it in place with JSON validation.
 
-## Session modes
+## Models
 
-A mode is a session profile: some sessions are plain coding, others handle
-content (reverse engineering, decompiled binaries, security material) that
-strict cloud models falsely refuse — those need a different consultant set
-and a different prescreen posture.
+`models.<name>` — the registry of consultable models: provider/model plus
+policy. Key each entry by the model it names (`grok-4.6`, `qwen-27b`), not
+by role — classes carry the capability semantics. Register every model you
+have, tag it with classes, and let routing auto-decide; there are no
+session modes or profiles to manage.
 
-`modes.<name>`:
-
-- `description` — one line shown in menus.
-- `consultants` — names selectable as rescuers while this mode is active
-  (applies to both the LLM-invoked `consult` tool and `/consult`; anything
-  else returns an error naming the available set). Unset = all.
-- `defaultConsultant` — default rescuer for this mode.
-- `prescreen` — policy override: `"skip"` (never screen — plain coding),
-  `"force"` (screen every staged consult, whatever the per-consultant flag
-  says — sensitive sessions), or `"consultant"` (default: the per-consultant
-  flag decides). Jail-`"none"` consultants never stage files, so they are
-  never screened regardless.
-
-Which mode is active, in priority order:
-
-1. Session override — `/geocine mode`, "This session only".
-2. Project pin — `"mode": "sensitive"` in the project's `.pi/geocine.json`
-   (set-and-forget for an RE folder).
-3. Global default — `"mode": "coding"` in `~/.pi/agent/geocine.json`.
-
-Example (from `geocine.example.json`): `coding` allows frontier + local-big
-with prescreen skipped; `sensitive` defaults to the abliterated consultant
-and force-prescreens anything that still goes to a strict cloud model. The
-active mode is logged on every consult request as a routing feature.
-
-## Consultants
-
-`consultants.<name>` — provider/model plus policy:
-
-- `role` — one line saying what this consultant is the right **rescuer**
+- `role` — one line saying what this model is the right **rescuer**
   for ("hard debugging", "planning", "content strict models falsely
   refuse"). The roster with roles is embedded in the consult tool
-  description, so the local model proposes a rescuer by role; the approval
+  description, so the local worker proposes by role; the approval
   prompt shows the proposal.
+- `classes` — capability tags, free-form with a suggested vocabulary:
+  `default`, `frontier`, `abliterated`, `cheap`, `fast`, `local`,
+  `intelligent`. **Classes are the selection language; the map keys are
+  internal ids** (log records and project-config merging) — every surface
+  shows `provider/model` plus the class braces instead: the tool roster,
+  approval prompts, pickers, status lines, and steer hints all address
+  models by class. A class works anywhere a name does: the consult tool's
+  `model` param and `/consult @cheap` both resolve to a model carrying it
+  (preferring one also classed `default`). The judge's route node sees
+  classes too and picks the cheapest model whose capabilities cover the
+  need. `default` marks the no-name fallback: move the `default` class to
+  change it (`/geocine models` → "Set as default" does exactly that). An
+  unclassed model is addressable only as `@<key>` and shows up that way in
+  the roster.
 - `jail` — `"staged"` (temp dir with only staged files — default),
   `"docker"` (staged + container, see [docker-jail.md](docker-jail.md)),
-  `"none"` (in place, read-only tools; for free/local consultants).
+  `"none"` (in place, read-only tools; for free/local models).
 - `prescreen` — run the local guardrail false-positive screen first
   (for strict cloud models).
-- `autoApprove` — skip the approval prompt for this consultant.
-- `thinking` — pi `--thinking` value for the consultant run.
+- `autoApprove` — skip the approval prompt for this model.
+- `thinking` — pi `--thinking` value for the consult run.
 - `notes` — extra briefing context (persona/emphasis).
 - `envKeys` — env var names forwarded into a docker jail (API-key
   providers only; OAuth needs no keys outside docker).
-- `defaultConsultant` — used when no name is given.
 
-Auth: consultants run as pi child processes on the host and inherit
+Auth: consulted models run as pi child processes on the host and inherit
 `~/.pi/agent/auth.json`, so OAuth providers (xai, openai-codex, ...) work
 with no extra config. The docker jail is the exception — see
 [docker-jail.md](docker-jail.md).
 
 ### Invoking a consultation
 
-- The **model** calls the `consult` tool with a question plus the minimal
-  files to stage; its live thinking/answer streams into the tool display.
-- **You** type `/consult [@consultant] [+file[:a-b] …] <question>` — `+`
+- The **worker model** calls the `consult` tool with a question plus the
+  minimal files to stage; the consulted model's live thinking/answer
+  streams into the tool display. If it names no model, the judge's route
+  node assigns one by role and class (`chosenBy: "judge"`); without a judge
+  the `default`-classed model applies.
+- **You** type `/consult [@model|@class] [+file[:a-b] …] <question>` — `+`
   tokens stage files (e.g. `/consult @frontier +docs/outline.md is this
   order right?`); progress streams in the footer status bar.
 - A staged-jail consultation with **no files** runs as pure Q&A: the
-  consultant gets no workspace and no read tools, is told so explicitly,
-  and is asked to name the paths it would need for a confident answer.
+  consulted model gets no workspace and no read tools, is told so
+  explicitly, and is asked to name the paths it would need for a confident
+  answer.
 
 ## Approval gate
 
 `approval.consultTool` — permission gate for **LLM-invoked** `consult` tool
-calls (`"ask"` default / `"auto"`). The prompt shows the proposed rescuer
-and offers: use it / **choose a different rescuer** / deny /
-always-allow-this-consultant / auto-approve-all; "always" answers persist to
-geocine.json. A denial tells the model to keep working itself and is logged
-as a `"user_no"` request — a free "should not have consulted" training
-label. User-typed `/consult` and headless runs never prompt.
+calls (`"ask"` default / `"auto"`). The prompt shows the proposed model
+and offers: use it / **choose a different model** / deny /
+always-allow-this-model / auto-approve-all; "always" answers persist to
+geocine.json. A denial tells the worker to keep working itself and is
+logged as a `"user_no"` request — a free "should not have consulted"
+training label. User-typed `/consult` and headless runs never prompt.
 
 Routing provenance is logged per request (`proposedConsultant` vs final
-`consultant`, `chosenBy: model|default|user_override|auto`), so user
-overrides accumulate as "wrong rescuer for this kind of problem" labels.
+`consultant` — the record field names are stable even after the registry
+rename — plus `chosenBy: model|default|judge|user_override|auto`), so user
+overrides accumulate as "wrong model for this kind of problem" labels —
+including overrides of the judge's route picks.
 
 ## Watchdog
 
 - `watchdog.enabled` — master switch (tier 0 is free).
+- `watchdog.judgeEveryTurn` — with a judge configured, every turn with new
+  tool activity gets a classifier verdict, not only turns where a counter
+  fired. Default **true**: this is what makes drift detectable at all (no
+  counter can see it), and System One calls are fast and cheap enough to
+  afford the cadence. Judge-only findings (no counter behind them) must
+  clear `judge.minConfidence` before a hint is sent; quiet turns confirmed
+  quiet produce no log record. Set `false` for verify-only judging.
 - `watchdog.baseUrl` / `model` / `apiKeyEnv` — optional second small-model
   endpoint for tier-1 verdicts. **Never the main single-slot llama.cpp
   server** (a side request evicts the main KV cache).
 - `watchdog.sendHints`, `hintCooldownTurns`, `loopThreshold`,
   `failStreakThreshold` — hint pacing and tier-0 sensitivity.
+
+## Judge (System One decision fabric)
+
+Fast typed judgments with calibrated probabilities (`lib/judge`), backed by
+[TypeSafe's Jev](https://docs.typesafe.ai) — a classifier that answers
+noul/choice/score questions in ~100–500 ms instead of generating text.
+
+It is structured as a *decision fabric*: expensive cognition (frontier
+consults) and destructive actions sit behind many small typed decisions,
+each a "node" over the same contract, each with a deterministic fallback:
+
+```
+                 expensive cognition
+                        ▲
+                        │ only when needed
+        ┌───── judge decision fabric ─────┐
+   stuck? drift?                    escalate? route?
+   done? continue?                  revert? risky?
+   regression? scope creep?         needs tests? human?
+        └── heuristics as fallback ───────┘
+                        │
+                deterministic tools
+```
+
+Shared plumbing (`lib/judge/index.ts`): every node passes its id, all nodes
+share one rate cap (`judge.maxCallsPerMinute`, default 30 — a decision loop
+degrades to heuristics instead of hammering the API), and a per-node ledger
+(calls, fallback answers, degradations, average latency) is shown by
+`/geocine judge`.
+
+Every `judge()` call walks a **degradation ladder**, best answer first:
+
+1. **Jev** (`judge.provider`) — calibrated probabilities, ~100–500 ms.
+2. **naive-llm** (`judge.fallback`) — one temperature-0 JSON completion on
+   an OpenAI-compatible endpoint (typically the local llama.cpp server, so
+   it costs nothing). Deliberately not smart: no retries, no reasoning,
+   capped tokens, self-reported probs clamped to 0.85 so this tier never
+   out-shouts calibrated sources. It prompts with the same
+   `(context, schema)` serialization the trace logs — train/serve parity
+   with the future offline head by construction.
+3. **Call-site heuristics** — counters, regexes, static defaults; a session
+   never breaks because classifiers are missing.
+
+**Decision economics** — the invariant the fabric enforces: *decisions run
+on the classifier or deterministic code; LLM tokens are spent on work,
+never on deciding.*
+
+- Classifier calls are the cheap currency (a few thousand input tokens per
+  call, no text generation) — asked freely, capped by the rate limit. The
+  naive-llm fallback tier is local and free; only its latency costs.
+- Every answered call is also a training example (`judge.trace`), so the
+  cost curve bends toward zero: gather traces → train a local
+  constrained-decoding head → repoint `judge.provider` → decisions run
+  free on your own hardware.
+- LLM-token spend from fabric *actions* is bounded on every path: injected
+  hints/steers have cooldowns, gate nudges are capped per task
+  (`gate.maxNudgesPerTask`) and suppressed at human decision points, and
+  frontier consults sit behind the approval gate.
+- Escalation machinery that injects messages — triage steers, mid-task
+  escalate suggestions, gate nudges — additionally requires the ACTIVE
+  model to be a cheap local provider (`rescue.localProviders`). A frontier
+  main model gets verdicts and status lines only: growing an expensive
+  model's context to suggest "switch up" is spending tokens on a decision
+  already made.
+- The two LLM fallbacks that remain are opt-in and last-resort: the
+  watchdog's tier-1 endpoint (only if `watchdog.baseUrl` is set, only when
+  the judge gave no answer) and the LLM prescreen (only when the judge
+  screen gave no answer, typically the free local model).
+
+The fabric nodes today:
+
+- **Watchdog verdicts** — by default on every turn with new tool activity
+  (`watchdog.judgeEveryTurn`), which is the only way drift gets caught.
+  When a tier-0 counter fires the judge confirms, refines
+  (`loop`/`stuck`/`drift`), or overrules it; an "ok" overrule needs
+  `judge.minConfidence`, and so does a judge-only accusation with no
+  counter behind it (confidence-gated routing both ways). Falls back to
+  the tier-1 LLM endpoint, then to tier 0 alone.
+- **Task triage & escalation** — difficulty/route judgment on every new
+  task, plus a mid-task escalate-now probability. See
+  [Triage](#triage-task-routing) below.
+- **Outcome gate** — when the agent settles, the work product (git diff,
+  captured test/lint outputs, trace) is verified and routed
+  continue/stop/escalate, plus a revert check. See
+  [Outcome gate](#outcome-gate) below.
+- **Command guard** — destructive-looking shell commands are judged against
+  the current task before execution. See
+  [Command guard](#command-guard) below.
+- **Consult routing** — when the worker calls `consult` without naming a
+  model, the judge assigns one from the registry by role, capability
+  `classes`, cost, and guardrail fit — cheapest model that covers the
+  need. Below `judge.minConfidence` the `default`-classed model applies;
+  the approval gate still owns the final say.
+- **Prescreen** — one parallel call scores false-refusal risk over the
+  staged files and flags trigger families (exploit-like code, RE artifacts,
+  secrets, sensitive prose). Falls back to `prescreen.model`, then to
+  `unknown`.
+
+Degradation is part of the contract: no key, timeout, HTTP error, or
+`"enabled": false` all mean `judge()` returns nothing and the fallback path
+runs — a session never breaks because the classifier is missing.
+
+- `judge.provider` — backend id (`typesafe` today). Backends implement one
+  interface (`lib/judge/types.ts`), so the classifier is replaceable — e.g.
+  a future local classifier head or fine-tuned LoRA — without touching call
+  sites.
+- `judge.model` — model alias, default `jev-latest`.
+- `judge.apiKeyEnv` — env var holding the key, default `TYPESAFE_API_KEY`.
+- `judge.timeoutMs` — per-call budget before falling back, default 4000.
+- `judge.minConfidence` — floor for overruling deterministic heuristics,
+  default 0.55.
+- `judge.maxCallsPerMinute` — fabric-wide rate cap across all nodes,
+  default 30. Beyond it, calls degrade to heuristics for the rest of the
+  minute.
+- `judge.fallback` — the naive-llm tier: `baseUrl` (OpenAI-compatible,
+  e.g. `http://127.0.0.1:8080/v1`; unset = no tier), `model`, `apiKeyEnv`,
+  `maxTokens` (default 500). Runs when the primary is unconfigured, times
+  out, errors, or answers unusably.
+- `judge.trace` — default true: every answered call, whichever tier
+  answered it, appends one **ready-to-train row** to
+  `<logDir>/judge-YYYY-MM.jsonl`:
+  `{ts, node, source, elapsedMs, context, schema, labels}`. That is
+  exactly the shape a parallel-constrained-decoding head (a small local
+  model answering a whole schema of boolean/enum fields in one broadcast
+  pass, e.g. Qwen2.5-1.5B) trains on — `lib/judge/serialize.ts` owns the
+  folding (`noul` → boolean field, `choice`/`score` → enum fields with
+  rubrics in the description, state → context, answers → `{value, prob,
+  probs}` soft labels). `source` names the answering tier
+  (`typesafe:jev-1.13` vs `naive-llm:...`), so weaker self-reported labels
+  are filtered or down-weighted at training time — that provenance is what
+  keeps the dataset clean while the naive tier keeps data flowing even
+  with no Jev key. Once trained, point `judge.provider` at your own
+  backend and the whole fabric moves off the paid API without touching a
+  call site.
+- `judge.enabled` — master switch (also toggled from `/geocine judge`).
+
+Verdicts land in the consult-log (`tier: "judge"` on watchdog records,
+`screener: "judge:<model>"` on prescreen records, `triage` records for
+routing, `gate` records for outcome verification, `guard` records for
+command risk), so judge decisions feed the same fine-tuning flywheel as
+everything else.
+
+## Triage (task routing)
+
+Judge-powered "is this task hard for a 27B, and should it go to the
+frontier?" — decided against the session stage, because the economics move:
+early in a session a handoff brief is small and lossless; deep in one, the
+local model's warm KV cache makes staying cheap per turn while a handoff
+loses invested state. Requires a configured judge; silently off without
+one. Runs only while the active model is a cheap local provider
+(`rescue.localProviders`) — routing exists to help the local worker, so a
+frontier main model is never steered.
+
+Two moments:
+
+- **Task start** (`extensions/triage.ts`) — every non-command user message
+  is judged (fire-and-forget, zero added latency): a 0–3 difficulty score
+  for the local model plus a route choice — `local`, `plan_first` (one
+  consult for a plan, local execution), or `frontier` (hand the whole
+  problem off). A confident non-local route steers the model toward an
+  early consult naming the resolved rescuer; the approval gate still owns
+  the spend.
+- **Mid-task** (rides the watchdog's every-turn judge call as a parallel
+  question, so it costs no extra request) — the probability that handing
+  off *now* beats continuing locally, given `session_stage` (turn, invested
+  tokens, % of window) and the recent tool calls. Above
+  `triage.escalateThreshold` it appends to a failure hint, or fires a
+  standalone suggestion on quiet turns — grinding without errors on a
+  too-hard task is exactly the case counters can never see.
+
+Every verdict is logged as a `TriageRecord` (task snippet, difficulty,
+route, confidence, context tokens) — task→route labels are the training
+data for a future local router.
+
+- `triage.enabled` — master switch. Default true.
+- `triage.escalateThreshold` — escalate-now probability needed to suggest a
+  consult mid-task. High on purpose (default 0.75): the suggestion
+  interrupts the loop.
+- `triage.cooldownTurns` — minimum turns between two escalate suggestions.
+  Default 8.
+
+## Outcome gate
+
+The watchdog judges the *activity trace* while the agent runs; the gate
+(`extensions/outcome-gate.ts`) judges the *work product* when it stops:
+
+```
+task, git diff, test/lint outputs, trace, stage ──► judge
+                                                      │
+                                    continue        stop        escalate
+                                       │                            │
+                                 nudge local on          suggest frontier consult
+```
+
+Evidence is gathered, never regenerated: `git diff` / `git status` are read
+directly (capped at `gate.maxDiffChars`), and test/lint/build results are
+captured from tool outputs the agent already produced during the run — the
+gate never runs a test suite itself. One judge call answers all questions
+in parallel (System One generates outputs together, so extra questions are
+nearly free):
+
+- `done` — calibrated "complete and correct?" probability. A task that
+  needed code changes but shows no diff, or failing checks, is not done.
+- `next` — the `continue`/`stop`/`escalate` route, weighed against the
+  session stage.
+- `revert` — did checks regress from passing to failing while the diff
+  kept growing? A confident "digging deeper" verdict makes the continue
+  nudge advise reverting to the last good state instead of forward-fixing
+  on top of broken changes.
+- Review flags (advice, never blocking): `regression_risk` (diff touches
+  shared behavior without coverage), `scope_creep` (off-task edits mixed
+  in), `architectural_change` (structural rather than local — worth a
+  stronger reviewer), `needs_more_tests` (changed behavior with no test
+  evidence). Confident flags land in the status line and sharpen the
+  nudge text.
+- `needs_human` — a safety override: when what remains hinges on a
+  decision only the user can make (product choice, irreversible step,
+  ambiguous requirement), nudges are suppressed entirely, whatever the
+  router said. Automatic continuation must never guess through a human
+  decision point.
+
+Actions are deliberately conservative:
+
+- `stop` — a status line only: "looks done" or "needs your review".
+- `continue` — the local model likely can finish: one idle nudge naming the
+  concrete evidence (failing checks, missing diff) restarts it. Local
+  models settle prematurely often enough that this is the gate's biggest
+  win.
+- `escalate` — the nudge suggests the consult tool with the resolved
+  rescuer; the approval gate still owns the spend.
+
+Nudges are capped at `gate.maxNudgesPerTask` per user task (a nudge starts
+a new local run), confidence-gated by `judge.minConfidence`, restricted to
+cheap local main models (`rescue.localProviders` — an expensive main model
+gets the verdict as a status line, never an auto-run), and a settle with
+no new tool activity is never re-gated — so a nudged run that changes
+nothing cannot loop. Every verdict is a `GateRecord` (done probability,
+route, diff stat, checks seen) for the flywheel.
+
+- `gate.enabled` — master switch. Default true (needs a configured judge).
+- `gate.maxNudgesPerTask` — automatic re-run cap. Default 1.
+- `gate.maxDiffChars` — diff evidence budget. Default 8000.
+
+## Command guard
+
+The fabric's "risky?" node for shell commands
+(`extensions/command-guard.ts`). A deterministic prefilter catches
+destructive-looking commands — recursive deletes (`rm -rf`), hard resets,
+`git clean -f`, force pushes, `DROP TABLE`, `Remove-Item -Recurse -Force`,
+disk tools — so the judge only ever sees the rare suspect and routine
+commands pay zero latency. The judge then answers one question with the
+task as context: does this command serve the task, or is it likely
+collateral damage? A destructive command the task plainly asks for ("reset
+the repo") passes; a hard reset nobody asked for is blocked via the
+`tool_call` event with a reason the model sees, instructing it to scope
+down or ask the user first (`ask_user` tool). A blocked retry fails the
+same way, which feeds the watchdog's fail streak — the fabric composes.
+
+Degradation: no judge, timeout, or rate cap = allow. pi's own
+tool-approval settings remain the real permission system; this node only
+adds a task-aware check for sessions running with broad approvals. Every
+judged command is a `GuardRecord` (command, task, risk, blocked).
+
+- `guard.enabled` — master switch. Default true (needs a configured judge).
+- `guard.blockThreshold` — collateral-damage probability needed to block.
+  High on purpose (default 0.8): wrongly blocking a legitimate command is
+  worse than deferring to pi's approval flow.
 
 ## Context keeper
 
@@ -133,7 +398,7 @@ overrides accumulate as "wrong rescuer for this kind of problem" labels.
 - `context.pruner` — ingestion-time trimming of oversized bash/powershell
   outputs (cache-neutral; the full output stays searchable via recall).
   Default on.
-- `context.summarizer` — checkpoint mode only: consultant whose model
+- `context.summarizer` — checkpoint mode only: registry entry whose model
   writes the checkpoint (default: the session's own model, which reuses the
   warm KV cache).
 - `context.maxTokens`, `prunerThresholdChars`, `prunerHeadChars`,
@@ -230,15 +495,15 @@ deliberately not wired in. `scripts/smoke-pdf.mjs` and
 - `rescue.enabled` — capture manual local-to-frontier switch episodes.
 - `rescue.localProviders` — providers considered "local"; switching away
   from one starts an episode.
-- `rescue.distillConsultant` — who drafts `/distill` lessons (default:
-  the prescreen consultant).
+- `rescue.distillModel` — who drafts `/distill` lessons (default:
+  the prescreen model).
 
 See [training-data.md](training-data.md) for what the episodes are for.
 
 ## Pre-screen
 
-- `prescreen.consultant` — which local consultant screens staged content
-  for guardrail false-positive risk before strict cloud consultants see it.
+- `prescreen.model` — which local model screens staged content
+  for guardrail false-positive risk before strict cloud models see it.
 - `prescreen.maxBytes` — staged bytes shown to the screener.
 
 ## Testing quickly
@@ -247,13 +512,13 @@ See [training-data.md](training-data.md) for what the episodes are for.
 # 1. Load check — session starts, /geocine opens the hub menu:
 pi
 /geocine
-/consultants
+/models
 /watchdog status
 
 # 2. bash-repair: ask the model to run a failing pytest/go test; the tool
 #    result should start with a [failfmt] block.
 
-# 3. consult (lenient, free): /consult @local-big what does this repo do?
+# 3. consult (lenient, free): /consult @cheap what does this repo do?
 
 # 4. consult tool end-to-end: ask the main model to
 #    "consult about <question> staging only <file>" and watch the status bar.

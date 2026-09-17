@@ -1,7 +1,7 @@
 // /geocine — one hub menu for the whole plugin set.
 //
 // Everything custom lives behind a single command so the surface stays
-// discoverable as it grows: consultants (inspect, set default, consult),
+// discoverable as it grows: models (inspect, set default, consult),
 // watchdog and rescue-capture toggles, distilling the latest rescue,
 // consult-log stats, lesson drafts, and direct config editing.
 //
@@ -9,148 +9,86 @@
 // config on every event, so changes apply immediately — no /reload. A
 // project-level .pi/geocine.json still overrides the global file.
 //
-// Jump straight to a section: /geocine mode|consultants|approval|context|watchdog|rescue|data|distill|log|lessons|config
+// Jump straight to a section: /geocine models|approval|context|watchdog|judge|rescue|data|distill|log|lessons|config
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-	activeMode,
 	CONFIG_FILE,
+	modelHandle,
+	modelLabel,
 	DEFAULT_CONTEXT_PROVIDERS,
+	defaultModelName,
 	type GeocineConfig,
 	loadConfig,
 	logDir,
-	type ModeConfig,
-	modeConsultants,
-	setSessionMode,
 	updateGlobalConfig,
 } from "../lib/config.ts";
 import { distillRescue, latestRescueRecord, LESSONS_DIR } from "../lib/distill.ts";
+import { judgeFabricStats, judgeStatus } from "../lib/judge/index.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
 import { harnessHubLine, harnessMenu } from "./models/index.ts";
 
-const SECTIONS = ["mode", "consultants", "approval", "context", "harness", "watchdog", "rescue", "data", "distill", "log", "lessons", "config"] as const;
+const SECTIONS = ["models", "approval", "context", "harness", "watchdog", "judge", "rescue", "data", "distill", "log", "lessons", "config"] as const;
 type Section = (typeof SECTIONS)[number];
 
 function onOff(v: boolean): string {
 	return v ? "ON" : "OFF";
 }
 
-function describeMode(m: ModeConfig): string {
-	const parts: string[] = [];
-	if (m.description) parts.push(m.description);
-	parts.push(m.consultants?.length ? m.consultants.join(", ") : "all consultants");
-	parts.push(`prescreen ${m.prescreen ?? "per-consultant"}`);
-	return parts.join(" · ");
-}
-
-const EXAMPLE_MODES = [
-	'"mode": "coding",',
-	'"modes": {',
-	'  "coding":    { "description": "normal dev work", "consultants": ["frontier", "local-big"], "defaultConsultant": "frontier", "prescreen": "skip" },',
-	'  "sensitive": { "description": "RE / sensitive content", "consultants": ["abliterated", "local-big"], "defaultConsultant": "abliterated", "prescreen": "force" }',
-	"}",
-].join("\n");
-
-async function modeMenu(ctx: ExtensionContext, cfg: GeocineConfig): Promise<void> {
-	// "$comment" and friends are JSON-comment convention keys, not modes.
-	const modes = Object.entries(cfg.modes ?? {}).filter(([n]) => !n.startsWith("$"));
-	if (modes.length === 0) {
-		ctx.ui.notify(
-			`No modes configured. A mode is a session profile: which consultants are selectable, who rescues by default, and whether staged consults get the guardrail prescreen. Add to ${CONFIG_FILE}:\n\n${EXAMPLE_MODES}`,
-			"info",
-		);
-		return;
-	}
-	const active = activeMode(cfg);
-	const NONE_VALUE = "\u0000none";
-	const items: SelectItem[] = modes.map(([n, m]) => ({
-		value: n,
-		label: `${n === active?.name ? "* " : "  "}${n}`,
-		description: describeMode(m),
-	}));
-	items.push({
-		value: NONE_VALUE,
-		label: `${active ? "  " : "* "}(no mode)`,
-		description: "all consultants · per-consultant prescreen",
-	});
-	const picked = await richSelect(
-		ctx,
-		`Session mode (* = active${active?.sessionOverride ? ", session override" : ""})`,
-		items,
-	);
-	if (!picked) return;
-	const name = picked === NONE_VALUE ? null : picked;
-	const scope = await richSelect(ctx, `Apply mode "${name ?? "none"}"`, [
-		{ value: "session", label: "This session", description: "config default returns next session" },
-		{ value: "persist", label: "Save as default", description: "writes geocine.json (project pins still win)" },
-	]);
-	if (!scope) return;
-	if (scope === "session") {
-		setSessionMode(name);
-		ctx.ui.notify(`Mode for this session: ${name ?? "none"}. (Config default returns next session.)`, "info");
-	} else {
-		setSessionMode(undefined);
-		updateGlobalConfig((g) => {
-			if (name) g.mode = name;
-			else delete g.mode;
-		});
-		ctx.ui.notify(`Default mode: ${name ?? "none"} (persisted). Tip: pin a mode per project via .pi/geocine.json.`, "info");
-	}
-}
-
-async function consultantsMenu(ctx: ExtensionContext, cfg: GeocineConfig): Promise<void> {
-	const names = Object.keys(cfg.consultants);
+async function modelsMenu(ctx: ExtensionContext, cfg: GeocineConfig): Promise<void> {
+	const names = Object.keys(cfg.models);
 	if (names.length === 0) {
-		ctx.ui.notify(`No consultants configured. Edit ${CONFIG_FILE} (see /geocine config).`, "warning");
+		ctx.ui.notify(`No models configured. Edit ${CONFIG_FILE} (see /geocine config).`, "warning");
 		return;
 	}
-	const active = activeMode(cfg);
-	const pool = modeConsultants(cfg);
-	const defaultName = active?.mode.defaultConsultant ?? cfg.defaultConsultant;
+	const defaultName = defaultModelName(cfg);
 	const items: SelectItem[] = names.map((n) => {
-		const c = cfg.consultants[n];
+		const c = cfg.models[n];
 		const flags = [
-			`${c.provider ?? "?"}/${c.model}`,
+			`{${c.classes?.join(", ") || "unclassed"}}`,
 			c.jail ?? "staged",
 			c.prescreen ? "prescreen" : "",
 			c.autoApprove ? "auto-approved" : "",
-			active && !pool[n] ? `NOT in mode ${active.name}` : "",
 		]
 			.filter(Boolean)
 			.join(" · ");
 		return {
 			value: n,
-			label: `${n === defaultName ? "* " : "  "}${n}`,
+			label: `${n === defaultName ? "* " : "  "}${modelLabel(c)}`,
 			description: `${c.role ?? "general consultant"} — ${flags}`,
 		};
 	});
-	const name = await richSelect(ctx, "Consultants (* = default rescuer)", items);
+	const name = await richSelect(ctx, "Models (* = default rescuer)", items);
 	if (!name) return;
-	const c = cfg.consultants[name];
+	const c = cfg.models[name];
+	const handle = modelHandle(cfg, name);
 
 	const actions: SelectItem[] = [
-		{ value: "consult", label: "Consult now", description: `prefill "/consult @${name} " in the editor` },
-		...(name === cfg.defaultConsultant
+		{ value: "consult", label: "Consult now", description: `prefill "/consult @${handle} " in the editor` },
+		...(c.classes?.includes("default")
 			? []
-			: [{ value: "default", label: "Set as default", description: "used when no rescuer is named" }]),
+			: [{ value: "default", label: "Set as default", description: 'moves the "default" class here (used when nothing else picks)' }]),
 		{ value: "details", label: "Show details", description: "provider, jail, prescreen, notes" },
 	];
-	const action = await richSelect(ctx, name, actions, {
+	const action = await richSelect(ctx, modelLabel(c), actions, {
 		header: [c.role ?? "general consultant"],
 	});
 	if (action === "consult") {
-		ctx.ui.setEditorText(`/consult @${name} `);
+		ctx.ui.setEditorText(`/consult @${handle} `);
 	} else if (action === "default") {
 		updateGlobalConfig((g) => {
-			g.defaultConsultant = name;
+			for (const [n, cc] of Object.entries(g.models ?? {})) {
+				if (n === name) cc.classes = [...new Set([...(cc.classes ?? []), "default"])];
+				else if (cc.classes?.includes("default")) cc.classes = cc.classes.filter((cls) => cls !== "default");
+			}
 		});
-		ctx.ui.notify(`Default consultant: ${name}`, "info");
+		ctx.ui.notify(`Default rescuer: ${modelLabel(c)} (carries the "default" class now)`, "info");
 	} else if (action === "details") {
 		ctx.ui.notify(
 			[
-				`${name}: ${c.provider ?? "(default provider)"}/${c.model}`,
+				`${modelLabel(c)} {${c.classes?.join(", ") || "unclassed"}}`,
 				`jail: ${c.jail ?? "staged"} | prescreen: ${c.prescreen ? "yes" : "no"} | thinking: ${c.thinking ?? "default"}`,
 				c.notes ? `notes: ${c.notes}` : "",
 				c.envKeys?.length ? `env forwarded to docker: ${c.envKeys.join(", ")}` : "",
@@ -258,9 +196,6 @@ async function editConfig(ctx: ExtensionContext): Promise<void> {
 async function runSection(section: Section, ctx: ExtensionContext): Promise<void> {
 	const cfg = loadConfig(ctx.cwd);
 	switch (section) {
-		case "mode":
-			await modeMenu(ctx, cfg);
-			return;
 		case "data": {
 			const latest = latestRescueRecord(cfg);
 			const picked = await richSelect(ctx, "Training data", [
@@ -275,11 +210,11 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 			if (picked === "log" || picked === "distill" || picked === "lessons") await runSection(picked, ctx);
 			return;
 		}
-		case "consultants":
-			await consultantsMenu(ctx, cfg);
+		case "models":
+			await modelsMenu(ctx, cfg);
 			return;
 		case "approval": {
-			const autoApproved = Object.entries(cfg.consultants)
+			const autoApproved = Object.entries(cfg.models)
 				.filter(([, c]) => c.autoApprove)
 				.map(([n]) => n);
 			const mode = cfg.approval?.consultTool ?? "ask";
@@ -293,7 +228,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 				...autoApproved.map((n) => ({
 					value: `revoke:${n}`,
 					label: `Revoke ${n}`,
-					description: "this always-allowed consultant prompts again",
+					description: "this always-allowed model prompts again",
 				})),
 			];
 			const picked = await richSelect(ctx, `Consult approval — currently ${mode.toUpperCase()}`, items);
@@ -307,7 +242,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 			} else {
 				const name = picked.slice("revoke:".length);
 				updateGlobalConfig((g) => {
-					if (g.consultants?.[name]) g.consultants[name].autoApprove = false;
+					if (g.models?.[name]) g.models[name].autoApprove = false;
 				});
 				ctx.ui.notify(`"${name}" will prompt again.`, "info");
 			}
@@ -383,6 +318,23 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 			ctx.ui.notify(`watchdog: ${onOff(next)} (persisted; /watchdog on|off is the session-only switch)`, "info");
 			return;
 		}
+		case "judge": {
+			const next = cfg.judge?.enabled === false;
+			updateGlobalConfig((g) => {
+				g.judge = { ...(g.judge ?? {}), enabled: next };
+			});
+			ctx.ui.notify(
+				[
+					`judge: ${onOff(next)} (persisted)`,
+					`state: ${judgeStatus({ ...(cfg.judge ?? {}), enabled: next })}`,
+					`trace: ${cfg.judge?.trace === false ? "OFF" : `ON → ${cfg.judge?.traceDir ?? "consult-log"}/judge-YYYY-MM.jsonl (offline-classifier training data)`}`,
+					"Decision fabric nodes: watchdog (stuck/drift, every turn), triage (task difficulty + route), gate (outcome: continue/stop/escalate + revert), guard (destructive-command risk), route (assigns the rescuer per consult — modes become optional), prescreen (refusal risk). Heuristics and pi's own approvals remain the fallbacks.",
+					...judgeFabricStats().map((line) => `  ${line}`),
+				].join("\n"),
+				"info",
+			);
+			return;
+		}
 		case "rescue": {
 			const next = cfg.rescue?.enabled === false;
 			updateGlobalConfig((g) => {
@@ -422,7 +374,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 
 export default function geocineMenu(pi: ExtensionAPI) {
 	pi.registerCommand("geocine", {
-		description: "geocine-pi hub: session mode, consultants, approval, context keeper, watchdog/rescue, training data, config",
+		description: "geocine-pi hub: models, approval, context keeper, watchdog/rescue, training data, config",
 		getArgumentCompletions: (prefix: string) => {
 			const items = SECTIONS.filter((s) => s.startsWith(prefix.toLowerCase())).map((s) => ({
 				value: s,
@@ -445,33 +397,25 @@ export default function geocineMenu(pi: ExtensionAPI) {
 			// right — the hub doubles as a status readout.
 			for (;;) {
 				const cfg = loadConfig(ctx.cwd);
-				const active = activeMode(cfg);
-				const pool = Object.keys(modeConsultants(cfg));
-				const total = Object.keys(cfg.consultants).length;
-				const defaultName = active?.mode.defaultConsultant ?? cfg.defaultConsultant ?? "none";
+				const total = Object.keys(cfg.models).length;
+				const defaultName = defaultModelName(cfg);
+				const defaultLabel = defaultName ? modelLabel(cfg.models[defaultName]) : "none";
 				const approvalMode = cfg.approval?.consultTool ?? "ask";
 				const contextMode = cfg.context?.mode ?? (cfg.context?.checkpoint === false ? "off" : "arc");
 				const watchdogOn = cfg.watchdog?.enabled !== false;
 				const rescueOn = cfg.rescue?.enabled !== false;
 				const items: Array<SelectItem & { value: Section }> = [
 					{
-						value: "mode",
-						label: "Mode",
-						description: active
-							? `${active.name}${active.sessionOverride ? " (this session)" : ""} — ${describeMode(active.mode)}`
-							: "none — all consultants · per-consultant prescreen",
-					},
-					{
-						value: "consultants",
-						label: "Consultants",
-						description: `${pool.length < total ? `${pool.length} of ${total} in mode` : total} · default ${defaultName}`,
+						value: "models",
+						label: "Models",
+						description: `${total} registered · judge routes per task by class · default ${defaultLabel}`,
 					},
 					{
 						value: "approval",
 						label: "Approval",
 						description:
 							approvalMode === "ask"
-								? `ASK — prompts before LLM-invoked consults${Object.values(cfg.consultants).some((c) => c.autoApprove) ? " (some always-allowed)" : ""}`
+								? `ASK — prompts before LLM-invoked consults${Object.values(cfg.models).some((c) => c.autoApprove) ? " (some always-allowed)" : ""}`
 								: "AUTO — LLM consults run without asking",
 					},
 					{
@@ -490,6 +434,11 @@ export default function geocineMenu(pi: ExtensionAPI) {
 						description: `${onOff(watchdogOn)} — enter turns ${watchdogOn ? "OFF" : "ON"}`,
 					},
 					{
+						value: "judge",
+						label: "Judge (System One)",
+						description: judgeStatus(cfg.judge),
+					},
+					{
 						value: "rescue",
 						label: "Rescue capture",
 						description: `${onOff(rescueOn)} — enter turns ${rescueOn ? "OFF" : "ON"}`,
@@ -504,7 +453,7 @@ export default function geocineMenu(pi: ExtensionAPI) {
 				const picked = (await richSelect(ctx, "geocine-pi", items)) as Section | undefined;
 				if (!picked) return;
 				await runSection(picked, ctx);
-				if (picked === "consultants" || picked === "config") return;
+				if (picked === "models" || picked === "config") return;
 			}
 		},
 	});

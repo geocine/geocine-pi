@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 700" font-family="ui-sans-serif, system-ui, 'Segoe UI', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 740" font-family="ui-sans-serif, system-ui, 'Segoe UI', sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#565b66"/>
@@ -6,31 +6,35 @@
     <marker id="arrowp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#d2a6ff"/>
     </marker>
+    <marker id="arrowg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#e6b450"/>
+    </marker>
   </defs>
 
   <!-- ayu dark background -->
-  <rect x="0" y="0" width="940" height="700" rx="12" fill="#0b0e14"/>
+  <rect x="0" y="0" width="940" height="740" rx="12" fill="#0b0e14"/>
 
   <!-- title -->
-  <text x="470" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#bfbdb6">geocine-pi: local-first loop, evidence-gated escalation</text>
+  <text x="470" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#bfbdb6">geocine-pi: local-first loop, System One decision fabric, evidence-gated escalation</text>
 
-  <!-- LOCAL MODEL (green) -->
+  <!-- LOCAL WORKER (green) -->
   <rect x="22" y="58" width="224" height="140" rx="8" fill="#0f131a" stroke="#aad94c" stroke-width="1.5"/>
-  <text x="134" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#aad94c">LOCAL MODEL</text>
-  <text x="134" y="102" text-anchor="middle" font-size="11" fill="#bfbdb6">Qwen / llama.cpp, owns the loop</text>
-  <line x1="40" y1="112" x2="228" y2="112" stroke="#1c212b" stroke-width="1"/>
-  <text x="134" y="128" text-anchor="middle" font-size="11" fill="#8a9199">model harness: trained tool dialects</text>
-  <text x="134" y="144" text-anchor="middle" font-size="11" fill="#8a9199">+ todo / web / ask_user / apply_patch</text>
-  <text x="134" y="160" text-anchor="middle" font-size="11" fill="#8a9199">bash-repair + /harness thinking</text>
-  <text x="134" y="186" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">cheap, always on</text>
+  <text x="134" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#aad94c">LOCAL WORKER</text>
+  <text x="134" y="99" text-anchor="middle" font-size="11" fill="#bfbdb6">Qwen / llama.cpp, owns the loop</text>
+  <line x1="40" y1="108" x2="228" y2="108" stroke="#1c212b" stroke-width="1"/>
+  <text x="134" y="124" text-anchor="middle" font-size="10" fill="#8a9199">harness: trained tool dialects per family</text>
+  <text x="134" y="139" text-anchor="middle" font-size="10" fill="#8a9199">todo · web · ask_user · read_pdf · apply_patch</text>
+  <text x="134" y="154" text-anchor="middle" font-size="10" fill="#8a9199">bash-repair · worked-timer · /harness thinking</text>
+  <text x="134" y="184" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">cheap, always on</text>
 
   <!-- CONTEXT KEEPER (teal) -->
-  <rect x="22" y="224" width="224" height="110" rx="8" fill="#0f131a" stroke="#95e6cb" stroke-width="1.5"/>
-  <text x="134" y="248" text-anchor="middle" font-size="12" font-weight="700" fill="#95e6cb">CONTEXT KEEPER</text>
-  <text x="134" y="266" text-anchor="middle" font-size="11" fill="#8a9199">prunes stale oversized tool output</text>
-  <text x="134" y="282" text-anchor="middle" font-size="11" fill="#8a9199">recall: search full raw transcript</text>
-  <text x="134" y="303" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">deterministic ARC digest, no model call</text>
-  <text x="134" y="319" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">compaction is never lossy</text>
+  <rect x="22" y="224" width="224" height="126" rx="8" fill="#0f131a" stroke="#95e6cb" stroke-width="1.5"/>
+  <text x="134" y="246" text-anchor="middle" font-size="12" font-weight="700" fill="#95e6cb">CONTEXT KEEPER</text>
+  <text x="134" y="264" text-anchor="middle" font-size="10" fill="#8a9199">prunes oversized tool output at ingest</text>
+  <text x="134" y="279" text-anchor="middle" font-size="10" fill="#8a9199">recall: search the full raw transcript</text>
+  <text x="134" y="294" text-anchor="middle" font-size="10" fill="#8a9199">notes pinned verbatim across compactions</text>
+  <text x="134" y="315" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">deterministic ARC digest · compacts early + idle</text>
+  <text x="134" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">compaction is never lossy</text>
 
   <!-- local to keeper (session stream down, pruned view + recall back) -->
   <path d="M120,198 L120,224" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
@@ -38,37 +42,13 @@
   <path d="M148,224 L148,198" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
   <text x="156" y="215" font-size="10" fill="#565b66">pruned view + recall</text>
 
-  <!-- WATCHDOG (yellow) -->
-  <rect x="22" y="384" width="224" height="96" rx="8" fill="#0f131a" stroke="#e6b450" stroke-width="1.5"/>
-  <text x="134" y="408" text-anchor="middle" font-size="12" font-weight="700" fill="#e6b450">WATCHDOG</text>
-  <text x="134" y="426" text-anchor="middle" font-size="11" fill="#8a9199">tier 0: loop / fail-streak counters</text>
-  <text x="134" y="442" text-anchor="middle" font-size="11" fill="#8a9199">tier 1: mini-LLM verdict (optional)</text>
-  <text x="134" y="463" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">injects "Located" hints</text>
-
-  <!-- keeper to watchdog (session events observed) and hints back up -->
-  <path d="M110,334 L110,384" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="104" y="364" text-anchor="end" font-size="10" fill="#565b66">tool results</text>
-  <path d="M160,384 L160,334" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-  <text x="167" y="364" font-size="10" fill="#565b66">hint / suggest consult</text>
-
-  <!-- RESCUE (red) -->
-  <rect x="22" y="530" width="224" height="96" rx="8" fill="#0f131a" stroke="#f07178" stroke-width="1.5"/>
-  <text x="134" y="554" text-anchor="middle" font-size="12" font-weight="700" fill="#f07178">RESCUE CAPTURE</text>
-  <text x="134" y="572" text-anchor="middle" font-size="11" fill="#8a9199">manual /model switch = episode:</text>
-  <text x="134" y="588" text-anchor="middle" font-size="11" fill="#8a9199">failing tail + fix trajectory</text>
-  <text x="134" y="609" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">/distill makes a draft lesson</text>
-
-  <!-- local to rescue (observes switches): outer channel in the column gap -->
-  <path d="M246,178 L310,178 Q318,178 318,186 L318,568 Q318,576 310,576 L246,576" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="288" y="170" text-anchor="middle" font-size="10" fill="#565b66">model switches</text>
-
   <!-- APPROVAL GATE (orange) -->
   <rect x="330" y="58" width="240" height="140" rx="8" fill="#0f131a" stroke="#ff8f40" stroke-width="1.5"/>
-  <text x="450" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#ff8f40">APPROVAL GATE</text>
-  <text x="450" y="102" text-anchor="middle" font-size="11" fill="#bfbdb6">model proposes a rescuer by role</text>
-  <line x1="348" y1="112" x2="552" y2="112" stroke="#1c212b" stroke-width="1"/>
-  <text x="450" y="130" text-anchor="middle" font-size="11" fill="#8a9199">use proposed / pick another</text>
-  <text x="450" y="147" text-anchor="middle" font-size="11" fill="#8a9199">deny / always-allow / auto</text>
+  <text x="450" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#ff8f40">APPROVAL GATE</text>
+  <text x="450" y="100" text-anchor="middle" font-size="11" fill="#bfbdb6">worker or judge proposes a model</text>
+  <line x1="348" y1="110" x2="552" y2="110" stroke="#1c212b" stroke-width="1"/>
+  <text x="450" y="128" text-anchor="middle" font-size="11" fill="#8a9199">use proposed / pick another</text>
+  <text x="450" y="145" text-anchor="middle" font-size="11" fill="#8a9199">deny / always-allow / auto</text>
   <text x="450" y="169" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">denials + overrides = routing labels</text>
 
   <!-- local to gate -->
@@ -80,56 +60,119 @@
   <text x="450" y="276" text-anchor="middle" font-size="12" font-weight="700" fill="#39bae6">STAGED JAIL</text>
   <text x="450" y="294" text-anchor="middle" font-size="11" fill="#8a9199">temp dir with ONLY staged files</text>
   <text x="450" y="310" text-anchor="middle" font-size="11" fill="#8a9199">= hard cap on input tokens</text>
-  <text x="450" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">optional local guardrail prescreen</text>
+  <text x="450" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">guardrail prescreen: fabric judge, else local</text>
   <text x="450" y="347" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">optional docker container</text>
 
   <!-- gate to jail -->
   <path d="M450,198 L450,252" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
   <text x="458" y="228" font-size="10" fill="#565b66">approved</text>
 
-  <!-- CONSULTANTS (blue) -->
+  <!-- MODEL REGISTRY (blue) -->
   <rect x="656" y="58" width="260" height="304" rx="8" fill="#0f131a" stroke="#59c2ff" stroke-width="1.5"/>
-  <text x="786" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#59c2ff">CONSULTANTS (roles)</text>
+  <text x="786" y="84" text-anchor="middle" font-size="13" font-weight="700" fill="#59c2ff">MODEL REGISTRY (classes)</text>
 
   <rect x="672" y="100" width="228" height="70" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
-  <text x="786" y="120" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">frontier: grok-4.6 (OAuth)</text>
+  <text x="786" y="120" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">xai/grok-4.6 (OAuth)</text>
   <text x="786" y="137" text-anchor="middle" font-size="10" fill="#8a9199">hard debugging, root cause, planning</text>
-  <text x="786" y="153" text-anchor="middle" font-size="10" fill="#565b66">staged jail + prescreen</text>
+  <text x="786" y="153" text-anchor="middle" font-size="10" fill="#565b66">staged + prescreen · {frontier, default}</text>
 
   <rect x="672" y="182" width="228" height="70" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
-  <text x="786" y="202" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">local-big: Qwen 27B</text>
+  <text x="786" y="202" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">llama.cpp/Qwen3.8-27B</text>
   <text x="786" y="219" text-anchor="middle" font-size="10" fill="#8a9199">free second opinion, sanity checks</text>
-  <text x="786" y="235" text-anchor="middle" font-size="10" fill="#565b66">runs in place, read-only</text>
+  <text x="786" y="235" text-anchor="middle" font-size="10" fill="#565b66">in place · {local, cheap, fast}</text>
 
   <rect x="672" y="264" width="228" height="70" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
-  <text x="786" y="284" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">abliterated: lenient</text>
+  <text x="786" y="284" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">abliteration.ai/abliterated-model</text>
   <text x="786" y="301" text-anchor="middle" font-size="10" fill="#8a9199">content strict models falsely refuse</text>
-  <text x="786" y="317" text-anchor="middle" font-size="10" fill="#565b66">RE, security, decompiled code</text>
+  <text x="786" y="317" text-anchor="middle" font-size="10" fill="#565b66">RE, security · {abliterated, cheap}</text>
 
-  <!-- jail to consultants -->
+  <text x="786" y="349" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">register everything, tag classes — cheapest wins</text>
+
+  <!-- jail to models -->
   <path d="M570,300 L656,300" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
   <text x="613" y="290" text-anchor="middle" font-size="10" fill="#565b66">one-shot brief</text>
 
-  <!-- consultants back to local (advisory) -->
+  <!-- models back to local (advisory) -->
   <path d="M786,58 L786,44 Q786,36 778,36 L150,36 Q142,36 142,44 L142,58" stroke="#565b66" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
   <text x="470" y="50" text-anchor="middle" font-size="10" fill="#565b66">one advisory note back to the loop</text>
 
-  <!-- CONSULT-LOG (purple) -->
-  <rect x="330" y="560" width="586" height="76" rx="8" fill="#0f131a" stroke="#d2a6ff" stroke-width="1.5"/>
-  <text x="623" y="584" text-anchor="middle" font-size="12" font-weight="700" fill="#d2a6ff">CONSULT-LOG: append-only JSONL</text>
-  <text x="623" y="602" text-anchor="middle" font-size="11" fill="#8a9199">requests, approvals / denials, routing overrides, staging manifests, prescreen</text>
-  <text x="623" y="618" text-anchor="middle" font-size="11" fill="#8a9199">verdicts, refusals, watchdog verdicts, rescue episodes, compactions</text>
+  <!-- DECISION FABRIC (gold) -->
+  <rect x="22" y="398" width="598" height="170" rx="8" fill="#0f131a" stroke="#e6b450" stroke-width="1.5"/>
+  <text x="321" y="420" text-anchor="middle" font-size="13" font-weight="700" fill="#e6b450">DECISION FABRIC — System One judge</text>
 
-  <!-- arrows into log -->
-  <path d="M450,362 L450,560" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <path d="M786,362 L786,560" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="794" y="460" font-size="10" fill="#565b66">results, usage</text>
-  <!-- watchdog to log: down the column gap, over to the log left edge -->
-  <path d="M246,448 L286,448 Q294,448 294,456 L294,610 Q294,618 302,618 L330,618" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <!-- rescue to log: straight across (rescue sits beside the log row) -->
-  <path d="M246,590 L330,590" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <rect x="36" y="430" width="184" height="54" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="128" y="446" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">triage</text>
+  <text x="128" y="460" text-anchor="middle" font-size="9" fill="#8a9199">new task → local / plan-first / frontier</text>
+  <text x="128" y="473" text-anchor="middle" font-size="9" fill="#565b66">difficulty weighed vs session stage</text>
 
-  <!-- flywheel: log, around the bottom and far-left edge, back into the local model -->
-  <path d="M420,636 L420,648 Q420,656 412,656 L18,656 Q10,656 10,648 L10,158 Q10,150 18,150 L22,150" stroke="#d2a6ff" stroke-width="1.8" fill="none" stroke-dasharray="6 4" marker-end="url(#arrowp)"/>
-  <text x="475" y="678" text-anchor="middle" font-size="11" font-weight="600" fill="#d2a6ff">fine-tune flywheel: mine episodes + labels, QLoRA the local model, consult less</text>
+  <rect x="229" y="430" width="184" height="54" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="321" y="446" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">command guard</text>
+  <text x="321" y="460" text-anchor="middle" font-size="9" fill="#8a9199">destructive cmd: serves the task, or</text>
+  <text x="321" y="473" text-anchor="middle" font-size="9" fill="#565b66">collateral damage? → block + reason</text>
+
+  <rect x="422" y="430" width="184" height="54" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="514" y="446" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">watchdog</text>
+  <text x="514" y="460" text-anchor="middle" font-size="9" fill="#8a9199">every turn: ok / loop / stuck / drift</text>
+  <text x="514" y="473" text-anchor="middle" font-size="9" fill="#565b66">+ escalate-now while mid-task</text>
+
+  <rect x="36" y="492" width="184" height="54" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="128" y="508" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">outcome gate</text>
+  <text x="128" y="522" text-anchor="middle" font-size="9" fill="#8a9199">settled: continue / stop / escalate</text>
+  <text x="128" y="535" text-anchor="middle" font-size="9" fill="#565b66">revert · risk · scope · tests · needs-human</text>
+
+  <rect x="229" y="492" width="184" height="54" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="321" y="508" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">consult route</text>
+  <text x="321" y="522" text-anchor="middle" font-size="9" fill="#8a9199">unnamed consult → cheapest model</text>
+  <text x="321" y="535" text-anchor="middle" font-size="9" fill="#565b66">whose classes cover the need</text>
+
+  <rect x="422" y="492" width="184" height="54" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="514" y="508" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">prescreen</text>
+  <text x="514" y="522" text-anchor="middle" font-size="9" fill="#8a9199">staged content → refusal risk</text>
+  <text x="514" y="535" text-anchor="middle" font-size="9" fill="#565b66">trigger families, lenient reroute</text>
+
+  <text x="321" y="560" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">one judge() · rate cap · per-node ledger · ladder: Jev (calibrated) → naive-llm (local, clamped) → heuristics</text>
+
+  <!-- keeper/worker events into fabric -->
+  <path d="M134,350 L134,398" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="142" y="378" font-size="10" fill="#565b66">turns · tools · diffs</text>
+
+  <!-- fabric steers back to worker (corridor between columns) -->
+  <path d="M290,398 L290,186 Q290,178 282,178 L246,178" stroke="#e6b450" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrowg)"/>
+  <text x="298" y="250" font-size="10" fill="#e6b450">steer · hint</text>
+  <text x="298" y="264" font-size="10" fill="#e6b450">nudge · block</text>
+
+  <!-- fabric route/prescreen up into the consult path -->
+  <path d="M450,398 L450,362" stroke="#e6b450" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrowg)"/>
+  <text x="458" y="384" font-size="10" fill="#e6b450">route · refusal risk</text>
+
+  <!-- TRAINING DATA (purple) -->
+  <rect x="22" y="604" width="894" height="86" rx="8" fill="#0f131a" stroke="#d2a6ff" stroke-width="1.5"/>
+  <text x="469" y="624" text-anchor="middle" font-size="12" font-weight="700" fill="#d2a6ff">TRAINING DATA — append-only JSONL, every decision labeled</text>
+
+  <rect x="37" y="634" width="280" height="46" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="177" y="648" text-anchor="middle" font-size="10" font-weight="600" fill="#d2a6ff">consult-log</text>
+  <text x="177" y="661" text-anchor="middle" font-size="9" fill="#8a9199">requests · approvals · overrides · refusals</text>
+  <text x="177" y="673" text-anchor="middle" font-size="9" fill="#565b66">watchdog / triage / gate / guard verdicts</text>
+
+  <rect x="329" y="634" width="280" height="46" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="469" y="648" text-anchor="middle" font-size="10" font-weight="600" fill="#d2a6ff">judge trace</text>
+  <text x="469" y="661" text-anchor="middle" font-size="9" fill="#8a9199">(context, schema, labels) row per call</text>
+  <text x="469" y="673" text-anchor="middle" font-size="9" fill="#565b66">jev vs naive-llm provenance, soft labels</text>
+
+  <rect x="621" y="634" width="280" height="46" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
+  <text x="761" y="648" text-anchor="middle" font-size="10" font-weight="600" fill="#d2a6ff">rescue episodes</text>
+  <text x="761" y="661" text-anchor="middle" font-size="9" fill="#8a9199">manual /model switch = fail tail + fix</text>
+  <text x="761" y="673" text-anchor="middle" font-size="9" fill="#565b66">/distill drafts lessons, human promotes</text>
+
+  <!-- arrows into training data -->
+  <path d="M320,568 L320,604" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="328" y="590" font-size="10" fill="#565b66">trace rows</text>
+  <path d="M570,340 L630,340 Q638,340 638,348 L638,604" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="648" y="480" font-size="10" fill="#565b66">consult records</text>
+  <path d="M786,362 L786,604" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="794" y="580" font-size="10" fill="#565b66">results · usage</text>
+
+  <!-- flywheel: training data, around the left edge, back into the worker -->
+  <path d="M250,690 L250,698 Q250,706 242,706 L18,706 Q10,706 10,698 L10,158 Q10,150 18,150 L22,150" stroke="#d2a6ff" stroke-width="1.8" fill="none" stroke-dasharray="6 4" marker-end="url(#arrowp)"/>
+  <text x="470" y="726" text-anchor="middle" font-size="11" font-weight="600" fill="#d2a6ff">flywheel: QLoRA the worker on episodes + advice pairs · train a judge head on trace rows → repoint judge.provider, decisions run free</text>
 </svg>
