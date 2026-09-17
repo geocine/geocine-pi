@@ -16,7 +16,8 @@ correlation id (`cid`) per consultation/incident:
 verdict records with their decision-time digests, `triage` records
 (task → route with difficulty/escalate probabilities), `gate` records
 (outcome-gate verdicts with their review flags), `guard` records
-(command + risky-probability + blocked/allowed), `rescue` episode
+(command + risky-probability + blocked/allowed), `tool_guard` records
+(flagged tool call + trigger + wasteful-probability + blocked), `rescue` episode
 records, and `compaction` records (summarizer, tokens replaced, outcome).
 
 What each record type trains:
@@ -31,6 +32,7 @@ What each record type trains:
 | Triage verdicts (`triage`) | task → route labels for a local router |
 | Outcome-gate verdicts (`gate`) | "was it actually done" / revert / risk-flag labels |
 | Command-guard decisions (`guard`) | destructive-command policy labels |
+| Tool-guard decisions (`tool_guard`) | wasteful-call detection labels for weak tool-callers |
 | Staging manifest vs files actually read | context-curation quality |
 
 `/geocine log` shows this month's record counts.
@@ -59,7 +61,7 @@ head share one format: train/serve parity by construction.
 `source` separates calibrated Jev labels from `naive-llm` ones, so weak
 labels can be filtered or down-weighted at training time. Once your head
 is trained, repoint `judge.provider` at it and every fabric decision —
-triage, watchdog, gate, guard, routing, prescreen — runs locally at zero
+triage, watchdog, gate, guard, toolcall, recall, routing, prescreen — runs locally at zero
 marginal cost. `/geocine judge` shows per-node call stats and the trace
 location.
 

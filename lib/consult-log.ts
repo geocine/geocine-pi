@@ -20,6 +20,7 @@ export type LogRecord =
 	| TriageRecord
 	| GateRecord
 	| GuardRecord
+	| ToolGuardRecord
 	| RescueRecord
 	| CompactionRecord;
 
@@ -47,7 +48,9 @@ export interface ConsultRequestRecord extends BaseRecord {
 	 * How the consultation was authorized. "user_no" records are denied
 	 * requests — direct training labels for "should not have consulted".
 	 */
-	approval?: "user_yes" | "user_no" | "always_allow" | "auto" | "headless" | "user_command";
+	approval?: "user_yes" | "user_no" | "always_allow" | "auto" | "judge_auto" | "headless" | "user_command";
+	/** Judge confidence when the fabric's approve node cleared this consult. */
+	approveP?: number;
 	/**
 	 * Routing provenance: which rescuer the model proposed vs who actually
 	 * ran. A user override (proposed != consultant) is a routing label —
@@ -103,6 +106,10 @@ export interface ConsultResultRecord extends BaseRecord {
 	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
 	elapsedMs: number;
 	error?: string;
+	/** Reads outside the staged jail the sentry blocked (0 = jail held clean). */
+	escapeAttempts?: number;
+	/** Sample of blocked out-of-jail paths (capped). */
+	escapePaths?: string[];
 }
 
 export interface WatchdogRecord extends BaseRecord {
@@ -160,6 +167,21 @@ export interface GuardRecord extends BaseRecord {
 	riskyP?: number;
 	blocked: boolean;
 	tool: string;
+}
+
+export interface ToolGuardRecord extends BaseRecord {
+	type: "tool_guard";
+	/** Tool the local worker tried to call. */
+	tool: string;
+	/** Call preview (tool + main argument, truncated). */
+	call: string;
+	/** Deterministic signal that flagged the call. */
+	trigger: "duplicate" | "retry_after_fail" | "reread";
+	/** The user task it was judged against (snippet). */
+	task: string;
+	/** Judge's wasteful probability. */
+	wastefulP?: number;
+	blocked: boolean;
 }
 
 export interface TriageRecord extends BaseRecord {

@@ -6,8 +6,9 @@ docker build -t geocine-consult docker
 
 Only needed for `jail: "docker"` models. `jail: "staged"` already
 gives the token firewall (the consulted model's cwd contains only staged
-files) without a container — docker adds process/filesystem isolation on
-top for models you trust less.
+files, and the jail sentry blocks + audits any read outside it) without a
+container — docker adds process/filesystem isolation on top for models
+you trust less.
 
 The staged snapshot is mounted at `/work` inside the container; the
 consulted model gets read-only tools and sees nothing else.

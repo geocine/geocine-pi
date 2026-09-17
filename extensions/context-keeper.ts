@@ -60,6 +60,7 @@ import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type ContextConfig, DEFAULT_CONTEXT_PROVIDERS, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
+import { judge, noulOf } from "../lib/judge/index.ts";
 
 const PRUNED_STASH_TYPE = "geocine-pruned";
 const NOTE_TYPE = "geocine-note";
@@ -303,6 +304,49 @@ function bm25Search(entries: EntryLike[], query: string, maxResults: number): st
 		const snippet = `${from > 0 ? "..." : ""}${d.text.slice(from, to)}${to < d.text.length ? "..." : ""}`;
 		return `--- [#${d.i} ${d.label}${d.ts}] ---\n${snippet}`;
 	});
+}
+
+// Fabric node "recall": rerank BM25 fallback results before the model sees
+// them. Exact-regex matches are literal hits and never reranked; fuzzy
+// keyword candidates can be junk a weak model will happily chase. One judge
+// call scores every snippet in parallel (one noul per result); only
+// confidently-irrelevant ones are dropped — uncertainty keeps the result.
+// No judge, timeout, or rate cap = pass-through.
+const RERANK_DROP_P = 0.35;
+
+async function rerankResults(cwd: string, query: string, ranked: string[]): Promise<{ kept: string[]; dropped: number }> {
+	const full = loadConfig(cwd);
+	if (full.context?.rerank === false || ranked.length < 2) return { kept: ranked, dropped: 0 };
+	const questions: Record<string, { type: "noul"; instructions: string; criteria: { true: string; false: string } }> = {};
+	for (let i = 0; i < ranked.length; i++) {
+		questions[`r${i}`] = {
+			type: "noul",
+			instructions: `Does search result r${i} contain information relevant to the query "${query.slice(0, 200)}"? The results are fuzzy keyword matches from a coding-session transcript; judge whether this one would actually help answer the query.`,
+			criteria: {
+				true: "Relevant: addresses the query's subject or contains the sought detail",
+				false: "Irrelevant: only shares incidental keywords with the query",
+			},
+		};
+	}
+	const result = await judge(
+		full.judge,
+		{
+			state: {
+				query: query.slice(0, 300),
+				results: Object.fromEntries(ranked.map((r, i) => [`r${i}`, r.slice(0, 400)])),
+			},
+			questions,
+		},
+		{ node: "recall", timeoutMs: 2500 },
+	);
+	if (!result) return { kept: ranked, dropped: 0 };
+	const kept = ranked.filter((_, i) => {
+		const p = noulOf(result, `r${i}`);
+		return p === undefined || p > RERANK_DROP_P;
+	});
+	// Never filter down to nothing: a wrong empty answer is worse than junk.
+	if (kept.length === 0) return { kept: ranked, dropped: 0 };
+	return { kept, dropped: ranked.length - kept.length };
 }
 
 // ---------- pinned notes ----------
@@ -680,12 +724,15 @@ export default function contextKeeper(pi: ExtensionAPI) {
 				text = `${total} match(es) in the raw transcript (showing ${snippets.length}, newest first):\n\n${snippets.join("\n\n")}`;
 			} else {
 				// Exact query missed: fall back to BM25 keyword relevance so a
-				// paraphrased query still lands near the right entries.
+				// paraphrased query still lands near the right entries, then
+				// let the judge drop confidently-irrelevant candidates.
 				const ranked = bm25Search(entries, params.query, max);
+				const { kept, dropped } = await rerankResults(ctx.cwd, params.query, ranked);
+				const droppedNote = dropped > 0 ? ` ${dropped} low-relevance candidate(s) filtered.` : "";
 				text =
-					ranked.length === 0
+					kept.length === 0
 						? `No transcript matches for: ${params.query}`
-						: `No exact matches for "${params.query}". Closest ${ranked.length} entries by keyword relevance (not exact hits — verify before relying on them):\n\n${ranked.join("\n\n")}`;
+						: `No exact matches for "${params.query}". Closest ${kept.length} entries by keyword relevance (not exact hits — verify before relying on them).${droppedNote}\n\n${kept.join("\n\n")}`;
 			}
 			return { content: [{ type: "text", text: text.slice(0, 12_000) }], details: { total } };
 		},

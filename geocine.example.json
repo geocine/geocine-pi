@@ -33,8 +33,9 @@
 	},
 
 	"approval": {
-		"$comment": "Gate for LLM-invoked consult tool calls (user-typed /consult never asks). 'ask' prompts yes/no/always-allow/auto-all; 'auto' never prompts. Per-model: \"autoApprove\": true.",
-		"consultTool": "ask"
+		"$comment": "Gate for LLM-invoked consult tool calls (user-typed /consult never asks). 'ask' prompts yes/no/always-allow/auto-all; 'judge' = the fabric's approve node auto-approves clearly justified, well-routed consults (>= approveThreshold) and falls back to asking when unsure — it never auto-denies, so denial labels stay human; 'auto' never prompts. Per-model: \"autoApprove\": true.",
+		"consultTool": "ask",
+		"approveThreshold": 0.85
 	},
 
 	"prescreen": {
@@ -74,8 +75,15 @@
 		"blockThreshold": 0.8
 	},
 
+	"toolGuard": {
+		"$comment": "Tool guard (needs a configured judge) — the fabric's call-level 'wasteful?' node, for CHEAP workers that are weak at tool use (rescue.localProviders — local or budget cloud; frontier workers are never guarded). A deterministic prefilter tracks exact-call repeats, identical retries after a failure, and 3+ re-reads of the same file; only suspects reach the judge, which blocks confident thrash with a corrective reason the model reads (use recall / change the approach). Repeats after a state change (an edit, a fix) are allowed. Capped per task and cooled down between blocks; no judge = allow.",
+		"enabled": true,
+		"blockThreshold": 0.8,
+		"maxBlocksPerTask": 3
+	},
+
 	"judge": {
-		"$comment": "System One classifier (TypeSafe Jev) — the decision fabric behind watchdog verdicts, task triage, the outcome gate, the command guard, and prescreen: fast typed judgments with calibrated probabilities in ~100-500ms. Degrades gracefully — no API key (env TYPESAFE_API_KEY), timeout, or 'enabled': false means every node falls back to its heuristic/LLM path. provider is a lib/judge backend id, so the classifier is swappable without touching call sites. minConfidence gates when a judge answer may overrule heuristics or act alone; maxCallsPerMinute is the fabric-wide rate cap (a decision loop degrades instead of hammering the API). Per-node call stats: /geocine judge.",
+		"$comment": "System One classifier (TypeSafe Jev) — the decision fabric behind watchdog verdicts, task triage, the outcome gate, the command guard, the tool guard, recall reranking, and prescreen: fast typed judgments with calibrated probabilities in ~100-500ms. Degrades gracefully — no API key (env TYPESAFE_API_KEY), timeout, or 'enabled': false means every node falls back to its heuristic/LLM path. provider is a lib/judge backend id, so the classifier is swappable without touching call sites. minConfidence gates when a judge answer may overrule heuristics or act alone; maxCallsPerMinute is the fabric-wide rate cap (a decision loop degrades instead of hammering the API). Per-node call stats: /geocine judge.",
 		"$comment_trace": "trace (default true) appends every answered judge call to <logDir>/judge-YYYY-MM.jsonl as one ready-to-train row: {ts, node, source, elapsedMs, context, schema, labels}. That is exactly the (context, schema, labels) shape a parallel-constrained-decoding head (e.g. Qwen2.5-1.5B) trains on — noul folded to a boolean field, choice/score to enum fields, answers to soft labels. source separates calibrated Jev labels from naive-llm ones, so weak labels can be filtered or down-weighted. Once trained, repoint provider at your own backend and decisions run free.",
 		"$comment_fallback": "fallback = the not-too-smart middle tier of the ladder Jev -> naive-llm -> heuristics: when Jev is unconfigured or a call fails, the same questions go to this OpenAI-compatible endpoint (the local llama.cpp server — free) as ONE temperature-0 JSON completion using the trace's own (context, schema) serialization (train/serve parity). Deliberately naive: no retries, no reasoning, probs clamped to 0.85 so it never out-shouts calibrated sources.",
 		"provider": "typesafe",
@@ -91,12 +99,13 @@
 	},
 
 	"context": {
-		"$comment": "context-keeper. providers = which model providers get this machinery AT ALL (default llama.cpp/lmstudio/ollama); any other picker-selected model uses pi's built-in compaction untouched. mode: 'arc' = deterministic compaction digest (no model call, instant, recall recovers exact content), 'checkpoint' = LLM-written structured checkpoint, 'off' = pi default. compactAtTokens = compact EARLY while a context.providers provider is active — pi's own threshold (contextWindow - reserveTokens) is minutes of prompt re-ingest too late on a local server. idleCompactMinutes = also compact after N idle minutes past half the threshold (cost lands while nobody waits). pruner = ingestion-time head/tail trim of oversized bash/powershell outputs (cache-neutral: trimmed ONCE at capture, full output stashed for recall). recall = transcript search (exact regex primary, BM25 fallback) + full entry read-back. notes = model-written facts pinned VERBATIM into every digest; reminderTokens = pre-compaction reminder lead so the model pins state before the cut (0 = off).",
+		"$comment": "context-keeper. providers = which model providers get this machinery AT ALL (default llama.cpp/lmstudio/ollama); any other picker-selected model uses pi's built-in compaction untouched. mode: 'arc' = deterministic compaction digest (no model call, instant, recall recovers exact content), 'checkpoint' = LLM-written structured checkpoint, 'off' = pi default. compactAtTokens = compact EARLY while a context.providers provider is active — pi's own threshold (contextWindow - reserveTokens) is minutes of prompt re-ingest too late on a local server. idleCompactMinutes = also compact after N idle minutes past half the threshold (cost lands while nobody waits). pruner = ingestion-time head/tail trim of oversized bash/powershell outputs (cache-neutral: trimmed ONCE at capture, full output stashed for recall). recall = transcript search (exact regex primary, BM25 fallback) + full entry read-back; rerank = judge-score the fuzzy BM25 candidates and drop confidently-irrelevant ones before the model chases them (exact matches never reranked). notes = model-written facts pinned VERBATIM into every digest; reminderTokens = pre-compaction reminder lead so the model pins state before the cut (0 = off).",
 		"providers": ["llama.cpp", "lmstudio", "ollama"],
 		"mode": "arc",
 		"compactAtTokens": 60000,
 		"idleCompactMinutes": 5,
 		"recall": true,
+		"rerank": true,
 		"notes": true,
 		"reminderTokens": 8000,
 		"pruner": true,
@@ -135,8 +144,8 @@
 
 	"rescue": {
 		"enabled": true,
-		"localProviders": ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"],
-		"$comment": "Captures manual local->frontier /model switches as rescue episodes in the consult-log. /distill drafts a lesson from the last episode using distillModel (default: prescreen.model).",
+		"localProviders": ["llama.cpp", "lmstudio", "ollama", "abliteration-ai", "baseten"],
+		"$comment": "Captures manual local->frontier /model switches as rescue episodes in the consult-log. /distill drafts a lesson from the last episode using distillModel (default: prescreen.model). localProviders doubles as the CHEAP-WORKER list: message-injecting/blocking machinery (triage steers, gate nudges, tool guard) arms only while the active picker model is from one of these. 'Local' means cheap, not physically local — budget cloud hosts (baseten, abliteration-ai) belong here too. The worker is never designated; it is whatever pi's model picker has active.",
 		"distillModel": "qwen-27b"
 	}
 }

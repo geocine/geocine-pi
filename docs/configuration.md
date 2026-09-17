@@ -42,6 +42,15 @@ session modes or profiles to manage.
 - `jail` — `"staged"` (temp dir with only staged files — default),
   `"docker"` (staged + container, see [docker-jail.md](docker-jail.md)),
   `"none"` (in place, read-only tools; for free/local models).
+  Staged jails are **enforced**, not just implied by cwd: a jail sentry
+  (`lib/jail-sentry.ts`, injected into the child via `pi -e`) intercepts
+  every tool call and blocks any path that resolves outside the staging
+  dir — absolute paths, `..` traversals, other drives. Deterministic path
+  math, no classifier (the jailed toolset is read-only with explicit path
+  args, so containment is exact). Blocked attempts are audited and folded
+  into the `consult_result` record (`escapeAttempts`, `escapePaths`) and
+  flagged in the advisory note, so an escape-happy model is visible
+  evidence, never a silent success.
 - `prescreen` — run the local guardrail false-positive screen first
   (for strict cloud models).
 - `autoApprove` — skip the approval prompt for this model.
@@ -73,12 +82,24 @@ with no extra config. The docker jail is the exception — see
 ## Approval gate
 
 `approval.consultTool` — permission gate for **LLM-invoked** `consult` tool
-calls (`"ask"` default / `"auto"`). The prompt shows the proposed model
-and offers: use it / **choose a different model** / deny /
+calls (`"ask"` default / `"judge"` / `"auto"`). The prompt shows the
+proposed model and offers: use it / **choose a different model** / deny /
 always-allow-this-model / auto-approve-all; "always" answers persist to
 geocine.json. A denial tells the worker to keep working itself and is
 logged as a `"user_no"` request — a free "should not have consulted"
 training label. User-typed `/consult` and headless runs never prompt.
+
+`"judge"` puts the gate on the decision fabric: the approve node judges
+whether the consult is clearly worth running without interrupting you —
+substantive question, minimal relevant staging, model classes/cost that
+fit the need (cheap/local consults clear easily; frontier-class ones must
+look genuinely beyond the local worker). At or above
+`approval.approveThreshold` (default 0.85) it runs with a visible
+"auto-approved by judge (p=…)" notice and a `"judge_auto"` + `approveP`
+record; anything less confident — including no judge, timeout, or rate
+cap — falls back to the ask prompt, with the judge's hesitation shown in
+the dialog header. The node never auto-denies: deny stays a human choice,
+so denial labels stay human labels.
 
 Routing provenance is logged per request (`proposedConsultant` vs final
 `consultant` — the record field names are stable even after the registry
@@ -189,11 +210,23 @@ The fabric nodes today:
 - **Command guard** — destructive-looking shell commands are judged against
   the current task before execution. See
   [Command guard](#command-guard) below.
+- **Tool guard** — call-level waste detection for cheap workers that are
+  weak at tool use: repeated identical calls, identical retries after a
+  failure, and 3+ re-reads of the same file are judged and confident
+  thrash is blocked with a corrective reason. See
+  [Tool guard](#tool-guard) below.
+- **Recall rerank** — when the `recall` tool's exact query misses and BM25
+  keyword fallback returns candidates, the judge scores each for relevance
+  and drops the confidently irrelevant ones (a weak model otherwise chases
+  junk snippets). Exact matches are never reranked.
 - **Consult routing** — when the worker calls `consult` without naming a
   model, the judge assigns one from the registry by role, capability
   `classes`, cost, and guardrail fit — cheapest model that covers the
   need. Below `judge.minConfidence` the `default`-classed model applies;
   the approval gate still owns the final say.
+- **Consult approval** — with `approval.consultTool: "judge"`, the approve
+  node clears clearly justified consults without a prompt and defers to
+  the ask dialog when unsure. See [Approval gate](#approval-gate).
 - **Prescreen** — one parallel call scores false-refusal risk over the
   staged files and flags trigger families (exploit-like code, RE artifacts,
   secrets, sensitive prose). Falls back to `prescreen.model`, then to
@@ -369,6 +402,35 @@ judged command is a `GuardRecord` (command, task, risk, blocked).
   High on purpose (default 0.8): wrongly blocking a legitimate command is
   worse than deferring to pi's approval flow.
 
+## Tool guard
+
+The fabric's call-level "wasteful?" node (`extensions/tool-guard.ts`), for
+cheap workers that are weak at tool use — the watchdog catches thrashing at
+turn granularity, but a weak model burns most of its tokens at call
+granularity. A deterministic prefilter tracks completed calls per task:
+an exact call already run twice, an identical retry of a call that already
+failed, or a fourth read of the same file flags the call as a suspect —
+everything else pays zero latency. The judge then decides with the task and
+the last ten calls in view: redundant thrash (nothing changed, the result
+will be the same) is blocked via the `tool_call` event with a corrective
+reason — use the `recall` tool for earlier output, change the approach, or
+state what new information the repeat would produce. Legitimate repeats
+(re-reading a file after editing it, re-running a build after a fix) pass,
+because the judge sees the edit in the recent calls.
+
+Frontier workers are never guarded — the node only arms when
+`rescue.localProviders` matches the active model. Blocks are capped per
+task and cooled down between hits so the guard corrects rather than nags.
+Degradation: no judge, timeout, or rate cap = allow. Every judged call is
+a `tool_guard` record (tool, call, trigger, wastefulP, blocked).
+
+- `toolGuard.enabled` — master switch. Default true (needs a configured
+  judge).
+- `toolGuard.blockThreshold` — wasteful probability needed to block.
+  Default 0.8.
+- `toolGuard.maxBlocksPerTask` — blocks per user task before the guard goes
+  quiet. Default 3.
+
 ## Context keeper
 
 - `context.providers` — which model providers get context-keeper machinery
@@ -384,6 +446,11 @@ judged command is a `GuardRecord` (command, task, risk, blocked).
 - `context.recall` — the transcript search tool (exact regex primary, BM25
   fallback on zero matches, full entry read-back via `entry`/`offsetChars`).
   Default on.
+- `context.rerank` — judge-rerank the BM25 fallback results: each fuzzy
+  candidate is scored for relevance to the query in one parallel judge call
+  and confidently irrelevant ones are dropped before the model sees them.
+  Exact matches are never reranked; the filter never empties the result
+  list; no judge = pass-through. Default on.
 - `context.notes` — the `note` tool; notes are pinned verbatim into every
   compaction digest. Default on.
 - `context.reminderTokens` — pre-compaction reminder lead: within this many
@@ -493,8 +560,15 @@ deliberately not wired in. `scripts/smoke-pdf.mjs` and
 ## Rescue capture
 
 - `rescue.enabled` — capture manual local-to-frontier switch episodes.
-- `rescue.localProviders` — providers considered "local"; switching away
-  from one starts an episode.
+- `rescue.localProviders` — the providers that count as the **cheap
+  worker**. This list does double duty: switching away from one starts a
+  rescue episode, and the machinery that injects messages or blocks calls
+  (triage steers, gate nudges, tool guard) arms only while the active
+  model is from one. "Local" is shorthand for cheap, not physically local —
+  the default already includes hosted abliteration-ai, and a budget cloud
+  host (e.g. `baseten` running Qwen) belongs here too. The worker itself is
+  never designated: it is whatever pi's model picker has active, read per
+  event, and nothing here switches it.
 - `rescue.distillModel` — who drafts `/distill` lessons (default:
   the prescreen model).
 

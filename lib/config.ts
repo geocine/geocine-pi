@@ -58,9 +58,14 @@ export interface ApprovalConfig {
 	/**
 	 * Gate for LLM-invoked `consult` tool calls (user-typed /consult never asks):
 	 *  - "ask" (default): prompt yes / no / always-allow / auto-approve-all.
+	 *  - "judge": the fabric's approve node auto-approves clearly justified,
+	 *    well-routed consults (>= approveThreshold); anything doubtful falls
+	 *    back to the ask prompt. Never auto-denies — deny stays a human call.
 	 *  - "auto": never prompt.
 	 */
-	consultTool?: "ask" | "auto";
+	consultTool?: "ask" | "judge" | "auto";
+	/** Confidence the approve node needs to skip the prompt. Default 0.85. */
+	approveThreshold?: number;
 }
 
 export interface WatchdogConfig {
@@ -146,6 +151,22 @@ export interface GuardConfig {
 	 * flow handle it. Default 0.8.
 	 */
 	blockThreshold?: number;
+}
+
+export interface ToolGuardConfig {
+	/**
+	 * Tool guard: the fabric's call-level "wasteful?" node, for local
+	 * workers that are weak at tool use. A deterministic prefilter tracks
+	 * exact-call repeats, identical retries after failure, and re-reads of
+	 * the same file; only suspects reach the judge, which blocks confident
+	 * thrash with a corrective reason the model reads. Frontier workers
+	 * are never guarded; no judge = allow. Default true.
+	 */
+	enabled?: boolean;
+	/** Wasteful probability needed to block. Default 0.8. */
+	blockThreshold?: number;
+	/** Max blocks per user task before the guard goes quiet. Default 3. */
+	maxBlocksPerTask?: number;
 }
 
 export interface PrescreenConfig {
@@ -245,6 +266,14 @@ export interface ContextConfig {
 	reminderTokens?: number;
 	/** Register the `recall` transcript-search tool. Default true. */
 	recall?: boolean;
+	/**
+	 * Judge-rerank fuzzy recall results: when the exact query misses and
+	 * BM25 keyword fallback returns candidates, the judge scores each for
+	 * relevance to the query and confidently-irrelevant ones are dropped
+	 * (weak models otherwise chase junk snippets). Exact matches are never
+	 * reranked. No judge = results pass through. Default true.
+	 */
+	rerank?: boolean;
 }
 
 export interface QwenConfig {
@@ -301,13 +330,19 @@ export interface PdfConfig {
 export const DEFAULT_LOCAL_PROVIDERS = ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"];
 
 /**
- * True when the session's ACTIVE model runs on a cheap/local provider
- * (rescue.localProviders). Precondition for all escalation machinery that
- * INJECTS messages — triage steers, mid-task escalate suggestions,
- * outcome-gate nudges. Injected messages grow an expensive main model's
- * context to suggest what the user already did (switch up), so a frontier
- * main model gets verdicts and status lines only. Decisions themselves
- * stay on the classifier: LLM tokens are for work, never for deciding.
+ * True when the session's ACTIVE model — whatever pi's model picker has
+ * selected, read per event, never designated — runs on a cheap provider
+ * (rescue.localProviders). "Local" is shorthand for cheap, not physically
+ * local: the default list already includes hosted abliteration-ai, and a
+ * budget cloud host (e.g. baseten running Qwen) belongs there too.
+ *
+ * Precondition for all escalation machinery that INJECTS messages or
+ * blocks calls — triage steers, mid-task escalate suggestions,
+ * outcome-gate nudges, tool-guard blocks. Injected messages grow an
+ * expensive main model's context to suggest what the user already did
+ * (switch up), so a frontier main model gets verdicts and status lines
+ * only. Decisions themselves stay on the classifier: LLM tokens are for
+ * work, never for deciding.
  */
 export function isLocalWorker(model: unknown, cfg: GeocineConfig): boolean {
 	const provider = (model as { provider?: string } | undefined)?.provider;
@@ -329,6 +364,7 @@ export interface GeocineConfig {
 	triage?: TriageConfig;
 	gate?: GateConfig;
 	guard?: GuardConfig;
+	toolGuard?: ToolGuardConfig;
 	prescreen?: PrescreenConfig;
 	docker?: DockerConfig;
 	rescue?: RescueConfig;

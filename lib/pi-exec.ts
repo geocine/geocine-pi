@@ -30,6 +30,13 @@ export interface PiRunOptions {
 	signal?: AbortSignal;
 	/** Run inside the docker jail: cwd is mounted at /work. */
 	docker?: { image: string; envKeys?: string[] };
+	/**
+	 * Enforce the staged jail: inject lib/jail-sentry.ts into the child,
+	 * which blocks tool calls whose paths resolve outside `root` and logs
+	 * each attempt to `auditFile`. Host children only (docker is its own
+	 * boundary and cannot resolve the sentry path).
+	 */
+	jail?: { root: string; auditFile?: string };
 	/** Streaming progress (thinking/answer deltas, tool starts), throttled. */
 	onProgress?: (progress: PiProgress) => void;
 }
@@ -69,6 +76,7 @@ export async function runPi(options: PiRunOptions): Promise<PiRunResult> {
 	if (options.model) piArgs.push("--model", options.model);
 	if (options.thinking) piArgs.push("--thinking", options.thinking);
 	if (options.tools && options.tools.length > 0) piArgs.push("--tools", options.tools.join(","));
+	if (options.jail && !options.docker) piArgs.push("-e", path.join(import.meta.dirname, "jail-sentry.ts"));
 	piArgs.push(options.prompt);
 
 	let command: string;
@@ -102,6 +110,14 @@ export async function runPi(options: PiRunOptions): Promise<PiRunResult> {
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
+			env:
+				options.jail && !options.docker
+					? {
+							...process.env,
+							GEOCINE_JAIL_ROOT: options.jail.root,
+							...(options.jail.auditFile ? { GEOCINE_JAIL_AUDIT: options.jail.auditFile } : {}),
+						}
+					: undefined,
 		});
 
 		const timeout = setTimeout(() => {

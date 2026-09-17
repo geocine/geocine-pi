@@ -218,13 +218,17 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 				.filter(([, c]) => c.autoApprove)
 				.map(([n]) => n);
 			const mode = cfg.approval?.consultTool ?? "ask";
+			const MODES = [
+				{ value: "ask", description: "prompt before every LLM-invoked consult" },
+				{ value: "judge", description: "fabric auto-approves clear consults, asks when unsure (never auto-denies)" },
+				{ value: "auto", description: "LLM-invoked consults run without asking" },
+			] as const;
 			const items: SelectItem[] = [
-				{
-					value: "switch",
-					label: `Switch to ${mode === "ask" ? "AUTO" : "ASK"}`,
-					description:
-						mode === "ask" ? "LLM-invoked consults run without asking" : "prompt before every LLM-invoked consult",
-				},
+				...MODES.filter((m) => m.value !== mode).map((m) => ({
+					value: `mode:${m.value}`,
+					label: `Switch to ${m.value.toUpperCase()}`,
+					description: m.description,
+				})),
 				...autoApproved.map((n) => ({
 					value: `revoke:${n}`,
 					label: `Revoke ${n}`,
@@ -233,8 +237,8 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 			];
 			const picked = await richSelect(ctx, `Consult approval — currently ${mode.toUpperCase()}`, items);
 			if (!picked) return;
-			if (picked === "switch") {
-				const next = mode === "ask" ? "auto" : "ask";
+			if (picked.startsWith("mode:")) {
+				const next = picked.slice("mode:".length) as "ask" | "judge" | "auto";
 				updateGlobalConfig((g) => {
 					g.approval = { ...(g.approval ?? {}), consultTool: next };
 				});
@@ -328,7 +332,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 					`judge: ${onOff(next)} (persisted)`,
 					`state: ${judgeStatus({ ...(cfg.judge ?? {}), enabled: next })}`,
 					`trace: ${cfg.judge?.trace === false ? "OFF" : `ON → ${cfg.judge?.traceDir ?? "consult-log"}/judge-YYYY-MM.jsonl (offline-classifier training data)`}`,
-					"Decision fabric nodes: watchdog (stuck/drift, every turn), triage (task difficulty + route), gate (outcome: continue/stop/escalate + revert), guard (destructive-command risk), route (assigns the rescuer per consult — modes become optional), prescreen (refusal risk). Heuristics and pi's own approvals remain the fallbacks.",
+					"Decision fabric nodes: watchdog (stuck/drift, every turn), triage (task difficulty + route), gate (outcome: continue/stop/escalate + revert), guard (destructive-command risk), toolcall (wasteful repeats/retries from local workers), recall (rerank fuzzy transcript-search results), route (assigns the model per consult), approve (auto-approves clear consults), prescreen (refusal risk). Heuristics and pi's own approvals remain the fallbacks.",
 					...judgeFabricStats().map((line) => `  ${line}`),
 				].join("\n"),
 				"info",
@@ -414,9 +418,11 @@ export default function geocineMenu(pi: ExtensionAPI) {
 						value: "approval",
 						label: "Approval",
 						description:
-							approvalMode === "ask"
-								? `ASK — prompts before LLM-invoked consults${Object.values(cfg.models).some((c) => c.autoApprove) ? " (some always-allowed)" : ""}`
-								: "AUTO — LLM consults run without asking",
+							approvalMode === "auto"
+								? "AUTO — LLM consults run without asking"
+								: approvalMode === "judge"
+									? "JUDGE — fabric auto-approves clear consults, asks when unsure"
+									: `ASK — prompts before LLM-invoked consults${Object.values(cfg.models).some((c) => c.autoApprove) ? " (some always-allowed)" : ""}`,
 					},
 					{
 						value: "context",

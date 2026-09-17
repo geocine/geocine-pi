@@ -412,6 +412,52 @@ interface GateResult {
 	name: string;
 	model: ModelConfig;
 	chosenBy: ChosenBy;
+	/** Confidence from the fabric's approve node, when it was consulted. */
+	approveP?: number;
+}
+
+/**
+ * The fabric's "approve?" node: is this consult clearly worth running
+ * without interrupting the user? Judges the question's substance, the
+ * staging discipline, and whether the chosen model's classes/cost fit the
+ * need. Only ever answers approve-vs-ask — denial stays a human call, so
+ * denial labels stay human labels.
+ */
+async function judgeApprove(
+	cfg: GeocineConfig,
+	proposedName: string,
+	proposed: ModelConfig,
+	proposedBy: "model" | "default" | "judge",
+	question: string,
+	files: string[],
+): Promise<number | undefined> {
+	const result = await judge(
+		cfg.judge,
+		{
+			state: {
+				question: question.slice(0, 600),
+				model: proposedName,
+				role: proposed.role ?? "general consultant",
+				classes: proposed.classes ?? [],
+				jail: proposed.jail ?? "staged",
+				proposed_by: proposedBy,
+				staged_files: files.slice(0, 20),
+			},
+			questions: {
+				approve: {
+					type: "noul",
+					instructions:
+						"The local worker wants to consult `model` (see `role`, `classes`) with `question`, staging `staged_files`. Should this run WITHOUT asking the user? Approve when the question is specific and substantive, the staged files are minimal and relevant, and the model's classes fit the need — cheap/local/fast consults need little justification, while frontier/intelligent-class ones must look genuinely beyond the local worker. When in doubt, ask.",
+					criteria: {
+						true: "Clearly justified and well-routed — run it without interrupting the user",
+						false: "Doubtful: vague question, over-staging, or cost/class mismatch — ask the user",
+					},
+				},
+			},
+		},
+		{ node: "approve", timeoutMs: 2500 },
+	);
+	return noulOf(result, "approve");
 }
 
 /**
@@ -441,6 +487,18 @@ async function gateConsult(
 	if (proposed.autoApprove || cfg.approval?.consultTool === "auto") {
 		return take("auto", "auto");
 	}
+
+	// Fabric approve node: confident yes skips the prompt; anything else
+	// (unsure, no judge, rate-capped) falls through to the ask dialog.
+	let approveP: number | undefined;
+	if (cfg.approval?.consultTool === "judge") {
+		approveP = await judgeApprove(cfg, proposedName, proposed, proposedBy, question, files);
+		if (approveP !== undefined && approveP >= (cfg.approval?.approveThreshold ?? 0.85)) {
+			if (ctx.hasUI) ctx.ui.notify(`consult auto-approved by judge (p=${approveP.toFixed(2)}): ${modelLabel(proposed)}`, "info");
+			return { ...take("judge_auto", proposedBy), approveP };
+		}
+	}
+
 	if (!ctx.hasUI) {
 		// Headless/scripted runs were launched deliberately; don't block them.
 		return take("headless", proposedBy);
@@ -470,7 +528,7 @@ async function gateConsult(
 		items,
 		{
 			header: [
-				`{${proposed.classes?.join(", ") || "unclassed"}} · jail ${proposed.jail ?? "staged"}`,
+				`{${proposed.classes?.join(", ") || "unclassed"}} · jail ${proposed.jail ?? "staged"}${approveP !== undefined ? ` · judge unsure (p=${approveP.toFixed(2)})` : ""}`,
 				`files: ${files.join(", ") || "(none)"}`,
 				`q: ${question.slice(0, 200)}${question.length > 200 ? "…" : ""}`,
 			],
@@ -542,7 +600,7 @@ async function consult(
 	signal: AbortSignal | undefined,
 	notify: (msg: string) => void,
 	approval: Approval,
-	routing?: { proposedConsultant: string; chosenBy: ChosenBy },
+	routing?: { proposedConsultant: string; chosenBy: ChosenBy; approveP?: number },
 	onProgress?: (progress: PiProgress) => void,
 ): Promise<ConsultOutcome> {
 	const dir = logDir(cfg);
@@ -561,6 +619,7 @@ async function consult(
 		contextNote,
 		approval,
 		proposedConsultant: routing?.proposedConsultant,
+		approveP: routing?.approveP,
 		chosenBy: routing?.chosenBy,
 	});
 
@@ -637,6 +696,9 @@ async function consult(
 	});
 
 	const runCwd = staging ? staging.dir : cwd;
+	// Staged host jails get the sentry: blocks + audits out-of-dir reads
+	// (docker is its own boundary; jail "none" is deliberately unrestricted).
+	const auditFile = jail === "staged" && staging ? path.join(os.tmpdir(), `geocine-jail-${cid}.jsonl`) : undefined;
 	notify(`consult: asking ${modelLabel(model)}…`);
 	const result = await runPi({
 		cwd: runCwd,
@@ -648,6 +710,7 @@ async function consult(
 		timeoutMs: 900_000,
 		signal,
 		onProgress,
+		jail: jail === "staged" && staging ? { root: staging.dir, auditFile } : undefined,
 		docker:
 			jail === "docker"
 				? { image: cfg.docker?.image ?? "geocine-consult", envKeys: model.envKeys }
@@ -655,6 +718,29 @@ async function consult(
 	});
 
 	const refused = looksLikeRefusal(result);
+
+	// Jail effectiveness: every sentry-blocked out-of-dir read is one audit
+	// row. Zero rows = the jail held with nothing to block.
+	let escapePaths: string[] = [];
+	if (auditFile && fs.existsSync(auditFile)) {
+		try {
+			escapePaths = fs
+				.readFileSync(auditFile, "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => {
+					try {
+						return String((JSON.parse(line) as { path?: unknown }).path ?? "");
+					} catch {
+						return "";
+					}
+				})
+				.filter(Boolean);
+		} catch {
+			// audit is best-effort evidence; enforcement already happened in the child
+		}
+		fs.rmSync(auditFile, { force: true });
+	}
 
 	// 4. Utilization: which staged files did the consultant actually open?
 	const filesRead = new Set<string>();
@@ -678,6 +764,8 @@ async function consult(
 		usage: result.usage,
 		elapsedMs: 0,
 		error: result.exitCode !== 0 ? result.stderr.slice(0, 2000) || `exit ${result.exitCode}` : undefined,
+		escapeAttempts: auditFile ? escapePaths.length : undefined,
+		escapePaths: escapePaths.length > 0 ? escapePaths.slice(0, 5) : undefined,
 	});
 
 	let note: string;
@@ -690,6 +778,9 @@ async function consult(
 			`Options: retry with less/reframed content, or use a lenient model.`;
 	} else {
 		note = `[advisory from ${modelName}]\n${result.finalText}`;
+	}
+	if (escapePaths.length > 0) {
+		note += `\n\n[jail] Sentry blocked ${escapePaths.length} read(s) outside the staged dir: ${escapePaths.slice(0, 3).join(", ")}${escapePaths.length > 3 ? ", …" : ""}. The advice above was produced without that content.`;
 	}
 
 	if (staging) cleanupStaging(staging);
@@ -848,7 +939,7 @@ export default function advisor(pi: ExtensionAPI) {
 				signal,
 				(msg) => ctx.ui.setStatus("advisor", msg),
 				gate.approval,
-				{ proposedConsultant: resolved.name, chosenBy: gate.chosenBy },
+				{ proposedConsultant: resolved.name, chosenBy: gate.chosenBy, approveP: gate.approveP },
 				streamProgress,
 			);
 			ctx.ui.setStatus("advisor", undefined);
