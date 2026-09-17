@@ -39,8 +39,7 @@ session modes or profiles to manage.
   change it (`/geocine models` → "Set as default" does exactly that). An
   unclassed model is addressable only as `@<key>` and shows up that way in
   the roster.
-- `jail` — `"staged"` (temp dir with only staged files — default),
-  `"docker"` (staged + container, see [docker-jail.md](docker-jail.md)),
+- `jail` — `"staged"` (temp dir with only staged files — default) or
   `"none"` (in place, read-only tools; for free/local models).
   Staged jails are **enforced**, not just implied by cwd: a jail sentry
   (`lib/jail-sentry.ts`, injected into the child via `pi -e`) intercepts
@@ -56,13 +55,10 @@ session modes or profiles to manage.
 - `autoApprove` — skip the approval prompt for this model.
 - `thinking` — pi `--thinking` value for the consult run.
 - `notes` — extra briefing context (persona/emphasis).
-- `envKeys` — env var names forwarded into a docker jail (API-key
-  providers only; OAuth needs no keys outside docker).
 
 Auth: consulted models run as pi child processes on the host and inherit
-`~/.pi/agent/auth.json`, so OAuth providers (xai, openai-codex, ...) work
-with no extra config. The docker jail is the exception — see
-[docker-jail.md](docker-jail.md).
+`~/.pi/agent/auth.json` and the environment, so OAuth providers (xai,
+openai-codex, ...) and API-key providers both work with no extra config.
 
 ### Invoking a consultation
 

@@ -91,7 +91,6 @@ async function modelsMenu(ctx: ExtensionContext, cfg: GeocineConfig): Promise<vo
 				`${modelLabel(c)} {${c.classes?.join(", ") || "unclassed"}}`,
 				`jail: ${c.jail ?? "staged"} | prescreen: ${c.prescreen ? "yes" : "no"} | thinking: ${c.thinking ?? "default"}`,
 				c.notes ? `notes: ${c.notes}` : "",
-				c.envKeys?.length ? `env forwarded to docker: ${c.envKeys.join(", ")}` : "",
 			]
 				.filter(Boolean)
 				.join("\n"),

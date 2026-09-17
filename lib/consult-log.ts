@@ -72,7 +72,7 @@ export interface StagedFile {
 export interface StagingRecord extends BaseRecord {
 	type: "staging";
 	consultant: string;
-	jail: "staged" | "docker" | "none";
+	jail: "staged" | "none";
 	files: StagedFile[];
 	totalBytes: number;
 	briefingBytes: number;
@@ -94,7 +94,7 @@ export interface PrescreenRecord extends BaseRecord {
 export interface ConsultResultRecord extends BaseRecord {
 	type: "consult_result";
 	consultant: string;
-	jail: "staged" | "docker" | "none";
+	jail: "staged" | "none";
 	exitCode: number;
 	refusalSuspected: boolean;
 	/** Consultant's final advisory text (what went back to the worker). */

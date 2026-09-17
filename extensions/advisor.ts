@@ -8,7 +8,7 @@
 //   2. optionally pre-screens the staged content with a local model for
 //      guardrail false-positive risk (strict cloud consultants only);
 //   3. runs the consultant as a separate `pi --mode json -p --no-session`
-//      process — in the staged dir, in a docker jail, or in-place read-only
+//      process — in the sentry-enforced staged dir, or in-place read-only
 //      for lenient/local consultants;
 //   4. returns ONE advisory note to the worker transcript;
 //   5. logs every decision with decision-time features to the consult-log
@@ -584,7 +584,7 @@ interface ConsultOutcome {
 	refused: boolean;
 	result: PiRunResult;
 	staging?: StagingResult;
-	jail: "staged" | "docker" | "none";
+	jail: "staged" | "none";
 }
 
 async function consult(
@@ -696,8 +696,8 @@ async function consult(
 	});
 
 	const runCwd = staging ? staging.dir : cwd;
-	// Staged host jails get the sentry: blocks + audits out-of-dir reads
-	// (docker is its own boundary; jail "none" is deliberately unrestricted).
+	// Staged jails get the sentry: blocks + audits out-of-dir reads
+	// (jail "none" is deliberately unrestricted).
 	const auditFile = jail === "staged" && staging ? path.join(os.tmpdir(), `geocine-jail-${cid}.jsonl`) : undefined;
 	notify(`consult: asking ${modelLabel(model)}…`);
 	const result = await runPi({
@@ -711,10 +711,6 @@ async function consult(
 		signal,
 		onProgress,
 		jail: jail === "staged" && staging ? { root: staging.dir, auditFile } : undefined,
-		docker:
-			jail === "docker"
-				? { image: cfg.docker?.image ?? "geocine-consult", envKeys: model.envKeys }
-				: undefined,
 	});
 
 	const refused = looksLikeRefusal(result);

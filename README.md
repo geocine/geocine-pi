@@ -60,4 +60,3 @@ approve, pick another, or deny. Every outcome lands in the consult-log.
 - [Local Qwen server](docs/local-qwen.md) — recommended `llama-server` launch flags for Qwen3.8-27B and why they matter
 - [Context management](docs/context.md) — compaction modes, ingestion pruner, recall tool, and the research behind them
 - [Training data](docs/training-data.md) — the decision log, the judge trace (train your own offline judge), rescue episodes, mining history, lessons
-- [Docker jail](docs/docker-jail.md) — hardened isolation for consulted models and auth notes

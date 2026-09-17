@@ -1,5 +1,5 @@
-// Spawn a separate `pi` process (optionally inside the docker jail) in JSON
-// mode and collect its messages, tool calls, final text, and usage.
+// Spawn a separate `pi` process in JSON mode and collect its messages,
+// tool calls, final text, and usage.
 //
 // Pattern vendored from pi's subagent example: `pi --mode json -p
 // --no-session` emits NDJSON events; `message_end` carries full messages.
@@ -28,13 +28,10 @@ export interface PiRunOptions {
 	/** Hard wall-clock cap. Default 10 minutes. */
 	timeoutMs?: number;
 	signal?: AbortSignal;
-	/** Run inside the docker jail: cwd is mounted at /work. */
-	docker?: { image: string; envKeys?: string[] };
 	/**
 	 * Enforce the staged jail: inject lib/jail-sentry.ts into the child,
 	 * which blocks tool calls whose paths resolve outside `root` and logs
-	 * each attempt to `auditFile`. Host children only (docker is its own
-	 * boundary and cannot resolve the sentry path).
+	 * each attempt to `auditFile`.
 	 */
 	jail?: { root: string; auditFile?: string };
 	/** Streaming progress (thinking/answer deltas, tool starts), throttled. */
@@ -76,23 +73,10 @@ export async function runPi(options: PiRunOptions): Promise<PiRunResult> {
 	if (options.model) piArgs.push("--model", options.model);
 	if (options.thinking) piArgs.push("--thinking", options.thinking);
 	if (options.tools && options.tools.length > 0) piArgs.push("--tools", options.tools.join(","));
-	if (options.jail && !options.docker) piArgs.push("-e", path.join(import.meta.dirname, "jail-sentry.ts"));
+	if (options.jail) piArgs.push("-e", path.join(import.meta.dirname, "jail-sentry.ts"));
 	piArgs.push(options.prompt);
 
-	let command: string;
-	let args: string[];
-	if (options.docker) {
-		command = "docker";
-		args = ["run", "--rm", "-v", `${options.cwd}:/work`, "-w", "/work"];
-		for (const key of options.docker.envKeys ?? []) {
-			if (process.env[key]) args.push("-e", `${key}=${process.env[key]}`);
-		}
-		args.push(options.docker.image, "pi", ...piArgs);
-	} else {
-		const invocation = piCliInvocation(piArgs);
-		command = invocation.command;
-		args = invocation.args;
-	}
+	const { command, args } = piCliInvocation(piArgs);
 
 	const result: PiRunResult = {
 		exitCode: -1,
@@ -106,18 +90,17 @@ export async function runPi(options: PiRunOptions): Promise<PiRunResult> {
 
 	await new Promise<void>((resolve) => {
 		const proc = spawn(command, args, {
-			cwd: options.docker ? undefined : options.cwd,
+			cwd: options.cwd,
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
-			env:
-				options.jail && !options.docker
-					? {
-							...process.env,
-							GEOCINE_JAIL_ROOT: options.jail.root,
-							...(options.jail.auditFile ? { GEOCINE_JAIL_AUDIT: options.jail.auditFile } : {}),
-						}
-					: undefined,
+			env: options.jail
+				? {
+						...process.env,
+						GEOCINE_JAIL_ROOT: options.jail.root,
+						...(options.jail.auditFile ? { GEOCINE_JAIL_AUDIT: options.jail.auditFile } : {}),
+					}
+				: undefined,
 		});
 
 		const timeout = setTimeout(() => {

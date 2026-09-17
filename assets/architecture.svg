@@ -61,7 +61,7 @@
   <text x="450" y="294" text-anchor="middle" font-size="11" fill="#8a9199">temp dir with ONLY staged files</text>
   <text x="450" y="310" text-anchor="middle" font-size="11" fill="#8a9199">= hard cap on input tokens</text>
   <text x="450" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">guardrail prescreen: fabric judge, else local</text>
-  <text x="450" y="347" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">optional docker container</text>
+  <text x="450" y="347" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">sentry blocks + audits out-of-dir reads</text>
 
   <!-- gate to jail -->
   <path d="M450,198 L450,252" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>

@@ -38,18 +38,16 @@ export interface ModelConfig {
 	/**
 	 * Jail mode:
 	 *  - "staged": model runs in a temp dir containing ONLY staged files
-	 *    (context firewall — bounds its input token spend). Default.
-	 *  - "docker": staged + wrapped in the vendored docker jail (needs image).
+	 *    (context firewall — bounds its input token spend), enforced by the
+	 *    jail sentry (out-of-root reads blocked and audited). Default.
 	 *  - "none": model runs in the live cwd with read-only tools
 	 *    (for free/local/lenient models where token waste costs nothing).
 	 */
-	jail?: "staged" | "docker" | "none";
+	jail?: "staged" | "none";
 	/** Run the local guardrail pre-screen before consulting. Default false. */
 	prescreen?: boolean;
 	/** Extra notes injected into the briefing (e.g. persona/emphasis). */
 	notes?: string;
-	/** Env var NAMES this model needs forwarded into a docker jail. */
-	envKeys?: string[];
 	/** Skip the user approval prompt for LLM-invoked consults of this model. */
 	autoApprove?: boolean;
 }
@@ -174,11 +172,6 @@ export interface PrescreenConfig {
 	model?: string;
 	/** Max staged bytes shown to the screener. Default 24576. */
 	maxBytes?: number;
-}
-
-export interface DockerConfig {
-	/** Image name for the docker jail. Default "geocine-consult". */
-	image?: string;
 }
 
 export interface RescueConfig {
@@ -366,7 +359,6 @@ export interface GeocineConfig {
 	guard?: GuardConfig;
 	toolGuard?: ToolGuardConfig;
 	prescreen?: PrescreenConfig;
-	docker?: DockerConfig;
 	rescue?: RescueConfig;
 	approval?: ApprovalConfig;
 	context?: ContextConfig;
@@ -407,7 +399,6 @@ export function loadConfig(cwd?: string): GeocineConfig {
 		gate: { ...(global.gate ?? {}), ...(project?.gate ?? {}) },
 		guard: { ...(global.guard ?? {}), ...(project?.guard ?? {}) },
 		prescreen: { ...(global.prescreen ?? {}), ...(project?.prescreen ?? {}) },
-		docker: { ...(global.docker ?? {}), ...(project?.docker ?? {}) },
 		rescue: { ...(global.rescue ?? {}), ...(project?.rescue ?? {}) },
 		approval: { ...(global.approval ?? {}), ...(project?.approval ?? {}) },
 		context: { ...(global.context ?? {}), ...(project?.context ?? {}) },

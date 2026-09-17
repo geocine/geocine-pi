@@ -4,7 +4,7 @@
 	"models": {
 		"$comment": "The model registry: every consultable model. Key each entry by the model it names (grok-4.6, qwen-27b), not by role — classes carry the capability semantics. classes are free-form tags (suggested: default, frontier, abliterated, cheap, fast, local, intelligent). A class works anywhere a model name does (consult tool, /consult @cheap) and the judge's route node picks the cheapest model whose classes cover the need — the standing goal is minimal LLM token spend. 'default' marks the fallback.",
 		"grok-4.6": {
-			"$comment": "OAuth providers (pi /login, stored in ~/.pi/agent/auth.json) need no envKeys: consult children are pi processes on the host and inherit auth. envKeys are only for API-key providers inside the docker jail.",
+			"$comment": "Consult children are pi processes on the host, so they inherit auth automatically: OAuth providers via pi /login (~/.pi/agent/auth.json), API-key providers via the environment.",
 			"provider": "xai",
 			"model": "grok-4.6",
 			"thinking": "high",
@@ -136,10 +136,6 @@
 		"$comment": "Provider behind web_fetch/web_search. 'auto' = first available (tinyfish when its key is present, else builtin DuckDuckGo scrape; a keyed provider that errors mid-call falls back to builtin for that call). Pin 'tinyfish' or 'builtin' to force one — pinned providers surface their errors. tinyfishApiKey: literal key or '$VAR_NAME' env reference; TINYFISH_API_KEY env var also works.",
 		"provider": "auto",
 		"$comment_key": "\"tinyfishApiKey\": \"$TINYFISH_API_KEY\""
-	},
-
-	"docker": {
-		"image": "geocine-consult"
 	},
 
 	"rescue": {
