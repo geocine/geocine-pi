@@ -60,7 +60,7 @@ import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type ContextConfig, DEFAULT_CONTEXT_PROVIDERS, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
-import { judge, noulOf, scoreOf } from "../lib/judge/index.ts";
+import { judge, modelBaseUrl, noulOf, scoreOf } from "../lib/judge/index.ts";
 
 const PRUNED_STASH_TYPE = "geocine-pruned";
 const NOTE_TYPE = "geocine-note";
@@ -314,7 +314,12 @@ function bm25Search(entries: EntryLike[], query: string, maxResults: number): st
 // No judge, timeout, or rate cap = pass-through.
 const RERANK_DROP_P = 0.35;
 
-async function rerankResults(cwd: string, query: string, ranked: string[]): Promise<{ kept: string[]; dropped: number }> {
+async function rerankResults(
+	cwd: string,
+	query: string,
+	ranked: string[],
+	workerBaseUrl: string | undefined,
+): Promise<{ kept: string[]; dropped: number }> {
 	const full = loadConfig(cwd);
 	if (full.context?.rerank === false || ranked.length < 2) return { kept: ranked, dropped: 0 };
 	const questions: Record<string, { type: "noul"; instructions: string; criteria: { true: string; false: string } }> = {};
@@ -337,7 +342,7 @@ async function rerankResults(cwd: string, query: string, ranked: string[]): Prom
 			},
 			questions,
 		},
-		{ node: "recall", timeoutMs: 2500 },
+		{ node: "recall", timeoutMs: 2500, workerBaseUrl },
 	);
 	if (!result) return { kept: ranked, dropped: 0 };
 	const kept = ranked.filter((_, i) => {
@@ -473,6 +478,7 @@ async function judgeDigestLines(
 	cwd: string,
 	pairs: DigestPair[],
 	signal: AbortSignal | undefined,
+	workerBaseUrl: string | undefined,
 ): Promise<{ lines: string[]; dropped: number; expanded: number } | undefined> {
 	const full = loadConfig(cwd);
 	if (full.context?.judgeDigest === false) return undefined;
@@ -504,7 +510,7 @@ async function judgeDigestLines(
 			},
 			questions,
 		},
-		{ node: "compact", timeoutMs: 6000, signal },
+		{ node: "compact", timeoutMs: 6000, signal, workerBaseUrl },
 	);
 	if (!result) return undefined;
 
@@ -547,6 +553,7 @@ async function judgeExpireNotes(
 	goal: string,
 	notes: string[],
 	signal: AbortSignal | undefined,
+	workerBaseUrl: string | undefined,
 ): Promise<string[]> {
 	const full = loadConfig(cwd);
 	if (full.context?.judgeDigest === false) return notes;
@@ -572,7 +579,7 @@ async function judgeExpireNotes(
 			},
 			questions,
 		},
-		{ node: "notes", timeoutMs: 4000, signal },
+		{ node: "notes", timeoutMs: 4000, signal, workerBaseUrl },
 	);
 	if (!result) return notes;
 	const kept = notes.filter((_, i) => {
@@ -771,7 +778,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 					},
 					questions,
 				},
-				{ node: "memory", timeoutMs: 3000 },
+				{ node: "memory", timeoutMs: 3000, workerBaseUrl: modelBaseUrl(ctx.model) },
 			);
 			// Injection mutates what the worker reads for the rest of the
 			// session — a wrong snippet is a false premise it cannot detect.
@@ -980,7 +987,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 				// paraphrased query still lands near the right entries, then
 				// let the judge drop confidently-irrelevant candidates.
 				const ranked = bm25Search(entries, params.query, max);
-				const { kept, dropped } = await rerankResults(ctx.cwd, params.query, ranked);
+				const { kept, dropped } = await rerankResults(ctx.cwd, params.query, ranked, modelBaseUrl(ctx.model));
 				const droppedNote = dropped > 0 ? ` ${dropped} low-relevance candidate(s) filtered.` : "";
 				text =
 					kept.length === 0
@@ -1008,7 +1015,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		const pairs = digestPairs(all as unknown as Array<Record<string, unknown>>);
 		const goal = [...pairs].reverse().find((p) => p.line.startsWith("[user]"))?.line.slice(7, 607) ?? "";
 		let notes = cfg.notes === false ? [] : collectNotes(ctx.sessionManager.getEntries() as EntryLike[]);
-		notes = await judgeExpireNotes(ctx.cwd, goal, notes, signal);
+		notes = await judgeExpireNotes(ctx.cwd, goal, notes, signal, modelBaseUrl(ctx.model));
 
 		const log = (
 			outcome: "arc" | "custom" | "fallback_empty" | "fallback_error" | "fallback_not_smaller",
@@ -1038,7 +1045,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		// The classifier (when configured) decides drop/keep/expand per step;
 		// without it the digest is exactly the deterministic newest-first cut.
 		if (mode === "arc") {
-			const judged = await judgeDigestLines(ctx.cwd, pairs, signal);
+			const judged = await judgeDigestLines(ctx.cwd, pairs, signal, modelBaseUrl(ctx.model));
 			const lines = judged?.lines ?? pairs.map((p) => p.line);
 			const judgeNote = judged
 				? `(classifier-scored: ${judged.dropped} stale steps dropped — recall recovers them — ${judged.expanded} kept verbatim)`

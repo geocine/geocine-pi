@@ -152,12 +152,18 @@ Every `judge()` call walks a **degradation ladder**, best answer first:
 
 1. **Jev** (`judge.provider`) — calibrated probabilities, ~100–500 ms.
 2. **naive-llm** (`judge.fallback`) — one temperature-0 JSON completion on
-   an OpenAI-compatible endpoint (typically the local llama.cpp server, so
-   it costs nothing). Deliberately not smart: no retries, no reasoning,
-   capped tokens, self-reported probs clamped to 0.85 so this tier never
-   out-shouts calibrated sources. It prompts with the same
-   `(context, schema)` serialization the trace logs — train/serve parity
-   with the future offline head by construction.
+   an OpenAI-compatible endpoint (a local server, so it costs nothing).
+   Deliberately not smart: no retries, no reasoning, capped tokens,
+   self-reported probs clamped to 0.85 so this tier never out-shouts
+   calibrated sources. It prompts with the same `(context, schema)`
+   serialization the trace logs — train/serve parity with the future
+   offline head by construction. **Same-origin guard**: the tier is
+   auto-disarmed for any call made while the ACTIVE worker is served from
+   the same host:port (loopback aliases collapse) — on a single-slot
+   llama.cpp server a side request evicts the worker's KV cache and the
+   next turn re-prefills the whole session prompt. Run the fallback on a
+   second small server (e.g. Qwen 4B on `:8081`) to keep it alive during
+   local-worker sessions.
 3. **Call-site heuristics** — counters, regexes, static defaults; a session
    never breaks because classifiers are missing.
 
@@ -271,10 +277,12 @@ runs — a session never breaks because the classifier is missing.
   default 30. Beyond it, calls degrade to heuristics for the rest of the
   minute.
 - `judge.fallback` — the naive-llm tier: `baseUrl` (OpenAI-compatible,
-  e.g. `http://127.0.0.1:8080/v1`; unset = no tier), `model`, `apiKeyEnv`,
+  e.g. `http://127.0.0.1:8081/v1`; unset = no tier), `model`, `apiKeyEnv`,
   `maxTokens` (default 500). Runs when the primary is unconfigured, times
-  out, errors, or answers unusably. Its answers are marked uncalibrated:
-  they may block, rerank, and route (counterfactual: a heuristic), but
+  out, errors, or answers unusably — except while the active worker is
+  served from the same host:port, where the tier auto-disarms (see the
+  same-origin guard above). Its answers are marked uncalibrated: they may
+  block, rerank, and route (counterfactual: a heuristic), but
   context-mutating actions — memory-gate injections and digest step drops
   — refuse this tier and act on calibrated answers only.
 - `judge.trace` — default true: every answered call, whichever tier

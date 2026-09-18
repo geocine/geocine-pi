@@ -22,7 +22,7 @@ import { createHash } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isLocalWorker, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
-import { judge, noulOf, resolveJudge } from "../lib/judge/index.ts";
+import { judge, modelBaseUrl, noulOf, resolveJudge } from "../lib/judge/index.ts";
 
 const RING_MAX = 30;
 const COOLDOWN_CALLS = 4;
@@ -136,7 +136,7 @@ export default function toolGuard(pi: ExtensionAPI) {
 					},
 				},
 			},
-			{ node: "toolcall", timeoutMs: 2500 },
+			{ node: "toolcall", timeoutMs: 2500, workerBaseUrl: modelBaseUrl(ctx.model) },
 		);
 		const wastefulP = noulOf(result, "wasteful");
 		const threshold = cfg.toolGuard?.blockThreshold ?? 0.8;

@@ -21,7 +21,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { modelHandle, isLocalWorker, loadConfig, logDir, resolveModel } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
-import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, resolveJudge, scoreOf } from "../lib/judge/index.ts";
+import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, modelBaseUrl, resolveJudge, scoreOf } from "../lib/judge/index.ts";
 import { buildRoster } from "./advisor.ts";
 
 const ROUTES = ["local", "plan_first", "frontier"] as const;
@@ -94,7 +94,7 @@ export default function triage(pi: ExtensionAPI) {
 					},
 				},
 			},
-		}, { node: "triage" });
+		}, { node: "triage", workerBaseUrl: modelBaseUrl(ctx.model) });
 		const route = choiceOf(result, "route");
 		if (!result || !route || !ROUTES.includes(route.choice as Route)) return;
 		const difficulty = scoreOf(result, "difficulty")?.score;

@@ -14,7 +14,11 @@
 // (fabric node) passes its node id so all micro-decisions share one rate
 // cap — a pathological loop can't hammer the classifier — and one
 // in-memory ledger (calls, degradations, latency per node) surfaced by
-// judgeFabricStats() in /geocine judge.
+// judgeFabricStats() in /geocine judge. Call sites also pass the active
+// worker's endpoint (opts.workerBaseUrl): the fallback tier is DISARMED
+// when it would hit the same server currently serving the worker, because
+// on a single-slot llama.cpp server a side request evicts the worker's KV
+// cache and the next turn re-ingests the whole session prompt.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -132,10 +136,46 @@ interface Tier {
 	settings: JudgeSettings;
 }
 
-/** The naive-llm fallback tier from judge.fallback, if configured. */
-function fallbackTier(settings: JudgeSettings): Tier | undefined {
+/**
+ * The active worker's endpoint, for the fallback same-origin guard. Call
+ * sites pass `workerBaseUrl: modelBaseUrl(ctx.model)` so judge() can tell
+ * when the fallback server IS the worker's server.
+ */
+export function modelBaseUrl(model: unknown): string | undefined {
+	const url = (model as { baseUrl?: unknown } | undefined)?.baseUrl;
+	return typeof url === "string" && url ? url : undefined;
+}
+
+/** host:port comparison key; loopback aliases (localhost/127.0.0.1/::1) collapse. */
+function originKey(raw: string): string | undefined {
+	try {
+		const u = new URL(raw);
+		const host = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(u.hostname.toLowerCase())
+			? "loopback"
+			: u.hostname.toLowerCase();
+		return `${host}:${u.port || (u.protocol === "https:" ? "443" : "80")}`;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The naive-llm fallback tier from judge.fallback, if configured — with
+ * the same-origin guard: the tier is dropped when its server is the one
+ * currently serving the worker. On a single-slot llama.cpp server the side
+ * request would evict the worker's KV cache and force a full re-prefill of
+ * the session prompt next turn (minutes on big local contexts), usually to
+ * answer nothing because a busy local model blows the judge timeout.
+ * Disarmed = the call degrades to the caller's heuristics.
+ */
+function fallbackTier(settings: JudgeSettings, workerBaseUrl?: string): Tier | undefined {
 	const fb = settings.fallback;
 	if (!fb?.baseUrl) return undefined;
+	if (workerBaseUrl) {
+		const a = originKey(fb.baseUrl);
+		const b = originKey(workerBaseUrl);
+		if (a !== undefined && a === b) return undefined;
+	}
 	return {
 		backend: naiveLlmJudge,
 		settings: { ...settings, baseUrl: fb.baseUrl, model: fb.model, apiKeyEnv: fb.apiKeyEnv, maxTokens: fb.maxTokens },
@@ -146,13 +186,13 @@ function fallbackTier(settings: JudgeSettings): Tier | undefined {
  * The degradation ladder, best tier first: primary classifier (Jev), then
  * the naive-llm fallback. Empty = call sites use their heuristics alone.
  */
-function tiersOf(cfg: JudgeSettings | undefined): Tier[] {
+function tiersOf(cfg: JudgeSettings | undefined, workerBaseUrl?: string): Tier[] {
 	const settings = cfg ?? {};
 	if (settings.enabled === false) return [];
 	const tiers: Tier[] = [];
 	const backend = BACKENDS.find((b) => b.id === (settings.provider ?? "typesafe"));
 	if (backend?.configured(settings)) tiers.push({ backend, settings });
-	const fb = fallbackTier(settings);
+	const fb = fallbackTier(settings, workerBaseUrl);
 	if (fb) tiers.push(fb);
 	return tiers;
 }
@@ -163,13 +203,17 @@ export function resolveJudge(cfg: JudgeSettings | undefined): Tier | undefined {
 }
 
 /** One-line state for menus/status: which classifier answers, or why none. */
-export function judgeStatus(cfg: JudgeSettings | undefined): string {
+export function judgeStatus(cfg: JudgeSettings | undefined, workerBaseUrl?: string): string {
 	const settings = cfg ?? {};
 	if (settings.enabled === false) return "disabled — heuristic fallbacks only";
 	const id = settings.provider ?? "typesafe";
 	const backend = BACKENDS.find((b) => b.id === id);
-	const fb = fallbackTier(settings);
-	const fbNote = fb ? ` · fallback naive-llm @ ${fb.settings.baseUrl}` : "";
+	const fb = fallbackTier(settings, workerBaseUrl);
+	const fbNote = fb
+		? ` · fallback naive-llm @ ${fb.settings.baseUrl}`
+		: settings.fallback?.baseUrl
+			? " · fallback disarmed (same server as the active worker)"
+			: "";
 	const keyEnv = id === "typesafe" ? typesafeApiKeyEnv(settings) : (settings.apiKeyEnv ?? "TYPESAFE_API_KEY");
 	if (!backend) return `unknown provider "${id}"${fbNote || " — heuristic fallbacks only"}`;
 	if (!backend.configured(settings)) {
@@ -191,9 +235,9 @@ export function judgeStatus(cfg: JudgeSettings | undefined): string {
 export async function judge(
 	cfg: JudgeSettings | undefined,
 	req: JudgeRequest,
-	opts?: { signal?: AbortSignal; timeoutMs?: number; node?: string },
+	opts?: { signal?: AbortSignal; timeoutMs?: number; node?: string; workerBaseUrl?: string },
 ): Promise<JudgeResult | undefined> {
-	const tiers = tiersOf(cfg);
+	const tiers = tiersOf(cfg, opts?.workerBaseUrl);
 	if (tiers.length === 0) return undefined;
 	const nodeId = opts?.node ?? "other";
 	const node = stats(nodeId);

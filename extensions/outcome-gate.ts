@@ -35,7 +35,7 @@ import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { modelHandle, isLocalWorker, loadConfig, logDir, resolveModel } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
-import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, noulOf, resolveJudge } from "../lib/judge/index.ts";
+import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, modelBaseUrl, noulOf, resolveJudge } from "../lib/judge/index.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -238,7 +238,7 @@ export default function outcomeGate(pi: ExtensionAPI) {
 					},
 				},
 			},
-		}, { node: "gate" });
+		}, { node: "gate", workerBaseUrl: modelBaseUrl(ctx.model) });
 		const next = choiceOf(result, "next");
 		if (!result || !next || !NEXT.includes(next.choice as Next)) return;
 		const doneP = noulOf(result, "done");

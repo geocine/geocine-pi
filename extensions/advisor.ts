@@ -41,7 +41,7 @@ import {
 	nowIso,
 	type StagedFile,
 } from "../lib/consult-log.ts";
-import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, type JudgeQuestion, noulOf, scoreOf } from "../lib/judge/index.ts";
+import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, type JudgeQuestion, modelBaseUrl, noulOf, scoreOf } from "../lib/judge/index.ts";
 import { looksLikeRefusal, runPi, type PiProgress, type PiRunResult } from "../lib/pi-exec.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
 
@@ -214,6 +214,7 @@ async function prescreenWithJudge(
 	files: Array<{ file: string; content: string }>,
 	question: string,
 	signal: AbortSignal | undefined,
+	workerBaseUrl: string | undefined,
 ): Promise<PrescreenVerdict | undefined> {
 	const questions: Record<string, JudgeQuestion> = {
 		refusal_risk: {
@@ -230,7 +231,7 @@ async function prescreenWithJudge(
 	for (const t of PRESCREEN_TRIGGER_NOULS) {
 		questions[t.id] = { type: "noul", instructions: t.instructions };
 	}
-	const result = await judge(cfg.judge, { state: { request: question, files }, questions }, { signal, node: "prescreen" });
+	const result = await judge(cfg.judge, { state: { request: question, files }, questions }, { signal, node: "prescreen", workerBaseUrl });
 	const risk = scoreOf(result, "refusal_risk");
 	if (!result || !risk) return undefined;
 	// Score is 0..2 over the three levels; thresholds are starting points —
@@ -256,6 +257,7 @@ async function prescreen(
 	staged: StagingResult,
 	question: string,
 	signal: AbortSignal | undefined,
+	workerBaseUrl: string | undefined,
 ): Promise<PrescreenVerdict> {
 	const maxBytes = cfg.prescreen?.maxBytes ?? PRESCREEN_DEFAULT_MAX_BYTES;
 	let budget = maxBytes;
@@ -274,7 +276,7 @@ async function prescreen(
 
 	// Judge screen first (fast, calibrated, typed); consultant LLM screen
 	// as the fallback; "unknown" when neither is configured.
-	const judged = await prescreenWithJudge(cfg, files, question, signal);
+	const judged = await prescreenWithJudge(cfg, files, question, signal, workerBaseUrl);
 	if (judged) return judged;
 
 	const screenerName = cfg.prescreen?.model;
@@ -365,6 +367,7 @@ async function routeModel(
 	question: string,
 	contextNote: string | undefined,
 	files: string[],
+	workerBaseUrl: string | undefined,
 ): Promise<string | undefined> {
 	const pool = cfg.models;
 	const names = Object.keys(pool);
@@ -398,7 +401,7 @@ async function routeModel(
 				criteria: Object.fromEntries(names.map((n) => [n, pool[n].role ?? null])),
 			},
 		},
-	}, { node: "route" });
+	}, { node: "route", workerBaseUrl });
 	const pick = choiceOf(result, "rescuer");
 	if (!pick || !pool[pick.choice]) return undefined;
 	if (pick.confidence < (cfg.judge?.minConfidence ?? DEFAULT_MIN_CONFIDENCE)) return undefined;
@@ -430,6 +433,7 @@ async function judgeApprove(
 	proposedBy: "model" | "default" | "judge",
 	question: string,
 	files: string[],
+	workerBaseUrl: string | undefined,
 ): Promise<number | undefined> {
 	const result = await judge(
 		cfg.judge,
@@ -455,7 +459,7 @@ async function judgeApprove(
 				},
 			},
 		},
-		{ node: "approve", timeoutMs: 2500 },
+		{ node: "approve", timeoutMs: 2500, workerBaseUrl },
 	);
 	return noulOf(result, "approve");
 }
@@ -492,7 +496,7 @@ async function gateConsult(
 	// (unsure, no judge, rate-capped) falls through to the ask dialog.
 	let approveP: number | undefined;
 	if (cfg.approval?.consultTool === "judge") {
-		approveP = await judgeApprove(cfg, proposedName, proposed, proposedBy, question, files);
+		approveP = await judgeApprove(cfg, proposedName, proposed, proposedBy, question, files, modelBaseUrl(ctx.model));
 		if (approveP !== undefined && approveP >= (cfg.approval?.approveThreshold ?? 0.85)) {
 			if (ctx.hasUI) ctx.ui.notify(`consult auto-approved by judge (p=${approveP.toFixed(2)}): ${modelLabel(proposed)}`, "info");
 			return { ...take("judge_auto", proposedBy), approveP };
@@ -650,7 +654,7 @@ async function consult(
 	let reframe: string | undefined;
 	if (shouldPrescreen(model) && staging && !noWorkspace) {
 		notify(`consult: pre-screening ${staging.files.length} staged file(s) locally…`);
-		const verdict = await prescreen(cfg, cwd, staging, question, signal);
+		const verdict = await prescreen(cfg, cwd, staging, question, signal, modelBaseUrl(ctx.model));
 		appendRecord(dir, {
 			type: "prescreen",
 			...base,
@@ -851,7 +855,7 @@ export default function advisor(pi: ExtensionAPI) {
 			let proposedBy: "model" | "default" | "judge" = params.model ? "model" : "default";
 			let wanted = params.model;
 			if (!wanted) {
-				const routed = await routeModel(cfg, params.question, params.context, params.files ?? []);
+				const routed = await routeModel(cfg, params.question, params.context, params.files ?? [], modelBaseUrl(ctx.model));
 				if (routed) {
 					wanted = routed;
 					proposedBy = "judge";

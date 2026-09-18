@@ -40,6 +40,7 @@ import {
 	judge,
 	type JudgeQuestion,
 	judgeStatus,
+	modelBaseUrl,
 	noulOf,
 	resolveJudge,
 } from "../lib/judge/index.ts";
@@ -318,7 +319,7 @@ export default function watchdog(pi: ExtensionAPI) {
 				},
 			},
 			questions,
-		}, { node: "watchdog" });
+		}, { node: "watchdog", workerBaseUrl: modelBaseUrl(ctx.model) });
 		lastJudgedEvents = toolEventsSeen;
 		const escalateP = noulOf(judged, "escalate");
 		const judgedVerdict = choiceOf(judged, "verdict");
@@ -503,7 +504,7 @@ export default function watchdog(pi: ExtensionAPI) {
 			ctx.ui.notify(
 				[
 					`watchdog: ${enabled && wd.enabled !== false ? "ON" : "OFF"}`,
-					`judge: ${judgeStatus(cfg.judge)}${cadence}`,
+					`judge: ${judgeStatus(cfg.judge, modelBaseUrl(ctx.model))}${cadence}`,
 					`tier1 endpoint: ${wd.baseUrl ?? "(none)"}`,
 					`hints: ${wd.sendHints !== false ? "on" : "off"}, cooldown ${wd.hintCooldownTurns ?? 4} turns`,
 					`ring: ${ring.length} recent tool calls tracked`,

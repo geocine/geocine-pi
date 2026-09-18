@@ -16,7 +16,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
-import { judge, noulOf, resolveJudge } from "../lib/judge/index.ts";
+import { judge, modelBaseUrl, noulOf, resolveJudge } from "../lib/judge/index.ts";
 
 /**
  * Clearly destructive shapes only — a false positive here costs one judge
@@ -80,7 +80,7 @@ export default function commandGuard(pi: ExtensionAPI) {
 					},
 				},
 			},
-			{ node: "guard", timeoutMs: 2500 },
+			{ node: "guard", timeoutMs: 2500, workerBaseUrl: modelBaseUrl(ctx.model) },
 		);
 		const riskyP = noulOf(result, "risky");
 		const threshold = cfg.guard?.blockThreshold ?? 0.8;

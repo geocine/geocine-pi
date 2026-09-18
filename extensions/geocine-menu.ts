@@ -26,7 +26,7 @@ import {
 	updateGlobalConfig,
 } from "../lib/config.ts";
 import { distillRescue, latestRescueRecord, LESSONS_DIR } from "../lib/distill.ts";
-import { judgeFabricStats, judgeStatus } from "../lib/judge/index.ts";
+import { judgeFabricStats, judgeStatus, modelBaseUrl } from "../lib/judge/index.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
 import { harnessHubLine, harnessMenu } from "./models/index.ts";
 
@@ -329,7 +329,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 			ctx.ui.notify(
 				[
 					`judge: ${onOff(next)} (persisted)`,
-					`state: ${judgeStatus({ ...(cfg.judge ?? {}), enabled: next })}`,
+					`state: ${judgeStatus({ ...(cfg.judge ?? {}), enabled: next }, modelBaseUrl(ctx.model))}`,
 					`trace: ${cfg.judge?.trace === false ? "OFF" : `ON → ${cfg.judge?.traceDir ?? "consult-log"}/judge-YYYY-MM.jsonl (offline-classifier training data)`}`,
 					"Decision fabric nodes: watchdog (stuck/drift, every turn), triage (task difficulty + route), gate (outcome: continue/stop/escalate + revert), guard (destructive-command risk), toolcall (wasteful repeats/retries from local workers), recall (rerank fuzzy transcript-search results), compact (drop/keep/expand per digest step), notes (expire stale pinned notes), memory (steer compacted history into new tasks), route (assigns the model per consult), approve (auto-approves clear consults), prescreen (refusal risk). Heuristics and pi's own approvals remain the fallbacks.",
 					...judgeFabricStats().map((line) => `  ${line}`),
@@ -441,7 +441,7 @@ export default function geocineMenu(pi: ExtensionAPI) {
 					{
 						value: "judge",
 						label: "Judge (System One)",
-						description: judgeStatus(cfg.judge),
+						description: judgeStatus(cfg.judge, modelBaseUrl(ctx.model)),
 					},
 					{
 						value: "rescue",
