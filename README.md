@@ -3,13 +3,14 @@
 Local-first plugin set for [pi](https://github.com/earendil-works/pi): the
 model you pick in pi's model picker owns the loop — typically a cheap one,
 local llama.cpp or a budget cloud host, and nothing here ever switches it;
-a System One decision fabric (a ~100 ms
-classifier, never LLM tokens) makes the micro-decisions — route this task?
-command too risky? actually done? escalate now? — stronger models are
-consulted on evidence, behind a user approval gate, inside a context-capped
-jail; and every decision — fabric verdicts, approvals, denials, routing
-overrides, refusals, manual rescues — is logged as training data for both
-the worker and your own offline judge.
+a System One decision fabric (a ~100 ms classifier, falling back to free
+local inference — never paid LLM tokens) makes the micro-decisions — route
+this task? command too risky? actually done? escalate now? — stronger
+models are consulted on evidence, behind an approval gate (yours, or the
+judge's for clearly justified consults), inside a context-capped jail; and
+every decision — fabric verdicts, approvals, denials, routing overrides,
+refusals, manual rescues — is logged as training data for both the worker
+and your own offline judge.
 
 ![architecture](assets/architecture.svg)
 
@@ -32,7 +33,7 @@ the worker and your own offline judge.
 | `pdf-reader` | `read_pdf` tool: native PDF inspection via [@firecrawl/pdf-inspector](https://github.com/firecrawl/pdf-inspector) (Rust, ~150ms per text PDF) — classifies text-based vs scanned, extracts per-page Markdown (tables, headings, multi-column reading order), takes 1-indexed page ranges, and searches across pages. Output is budget-capped (`pdf.maxChars`); omitted pages are named so the model pages through instead of flooding context. Scanned pages are flagged, not OCR'd. | `read_pdf` tool |
 | `models/` | Per-model-family harness registry, one file per family. Advertises each model's RL-trained tool dialect on the wire (qwen-code names for Qwen, grok-build names for Grok, codex `exec_command` + a native `apply_patch` for OpenAI) while pi's tools and transcript stay canonical. Fills the trained-tool gaps pi does not cover: a shared `todo` plan tool (aliased as `todo_write` / `update_plan`), `web_fetch` + `web_search` (qwen/grok only; pluggable backends — TinyFish APIs when a key is configured, builtin DuckDuckGo scrape otherwise, `web.provider` pins one), `view_image`, and dialect envelopes over `ask_user`. Model-owned tools are hidden from models that were not trained on them. Plus Qwen tool-call recovery, llama.cpp schema fixes, and thinking budgets. | Automatic. `/harness` |
 | `baseten-limits` | Client-side RPM/TPM pacing + server `429 retry_after` handling for Baseten. | Automatic |
-| `lib/judge` | The System One decision fabric ([TypeSafe Jev](https://docs.typesafe.ai) backend): typed noul/choice/score judgments with calibrated probabilities in ~100–500 ms. Nodes: watchdog verdicts, task triage, outcome gate, command guard, tool guard (wasteful-call blocks for weak tool-callers), recall rerank, compaction scoring (drop/keep/expand per digest step), note expiry, task-start memory gate, consult routing, consult approval (auto-approves clear consults, asks when unsure, never auto-denies), consult prescreen — all sharing one rate cap and a per-node stats ledger. Degradation ladder per call: Jev → naive-llm fallback (one deliberately-dumb temperature-0 JSON completion on the local llama.cpp server, probs clamped) → call-site heuristics. Every answered call is traced to JSONL as a ready-to-train `(context, schema, labels)` row with tier provenance — the dataset for your own offline constrained-decoding classifier; once trained, repoint `judge.provider` and decisions run free. | Automatic. `/geocine judge` |
+| `lib/judge` | The System One decision fabric ([TypeSafe Jev](https://docs.typesafe.ai) backend): typed noul/choice/score judgments with calibrated probabilities in ~100–500 ms. Nodes: watchdog verdicts, task triage, outcome gate, command guard, tool guard (wasteful-call blocks for weak tool-callers), recall rerank, compaction scoring (drop/keep/expand per digest step), note expiry, task-start memory gate, consult routing, consult approval (auto-approves clear consults, asks when unsure, never auto-denies), consult prescreen — all sharing one rate cap and a per-node stats ledger. Degradation ladder per call: Jev → naive-llm fallback (one deliberately-dumb temperature-0 JSON completion on a local side server, probs clamped; auto-disarmed when it would hit the server serving the active worker, since that evicts the worker's KV cache) → call-site heuristics. Every answered call is traced to JSONL as a ready-to-train `(context, schema, labels)` row with tier provenance — the dataset for your own offline constrained-decoding classifier; once trained, repoint `judge.provider` and decisions run free. | Automatic. `/geocine judge` |
 | `abliteration-cache` | Prompt-cache routing hint for abliteration.ai: sends a stable per-session `prompt_cache_key` so requests land on the same cached prefix (cache reads bill at 10% of input). | Automatic |
 
 ## Install
@@ -40,7 +41,13 @@ the worker and your own offline judge.
 ```bash
 pi install /path/to/geocine-pi          # global, live-editable
 cp geocine.example.json ~/.pi/agent/geocine.json   # then edit the model registry
+export TYPESAFE_API_KEY=...             # arms the decision fabric (Jev)
 ```
+
+Without a key every judge-powered feature silently degrades to its
+deterministic fallback — still safe, just heuristics-only. No key? Point
+`judge.fallback.baseUrl` at a small model on a SECOND local server (e.g.
+Qwen 4B on `:8081`, never the worker's own port) for free fabric decisions.
 
 ## Quick start
 
