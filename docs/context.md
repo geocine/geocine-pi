@@ -35,6 +35,31 @@ details back on demand:
   task-completion metrics hide the extra turns agents spend *re-acquiring*
   state that compression dropped (re-reading files, re-running commands).
   Retrieval from the transcript is cheaper than re-derivation.
+- **Zero-Mem** ([alphaXiv 2607.29377](https://www.alphaxiv.org/abs/2607.29377)):
+  memory operations need **zero LLM tokens**. Raw traces stay the source of
+  record; deterministic structure (BM25 + entity/temporal views) proposes
+  evidence and deterministic calibration filters it — the only LLM call is
+  the final answer. Beats Mem0/GAM/LightMem (which spend 0.5k–18k LLM
+  tokens *per query* operating memory) on LoCoMo and HotpotQA at 0 tokens
+  and 0.22 s/query. This is the economics behind the judge-run memory
+  nodes below: classifiers decide, the worker never spends tokens on
+  memory management.
+- **Referential dangling**
+  ([alphaXiv 2608.04569](https://www.alphaxiv.org/abs/2608.04569)): the
+  failure mode of classifier-scored deletion. Six hard compressors
+  (LLMLingua-2 included) that score units *independently* under a budget
+  split dependency pairs in 32–60% of multi-hop cases — the answer
+  survives, the sentence that makes it interpretable doesn't. Their fix (a
+  compact classifier restoring omitted-but-needed sentences) recovers +4.7
+  points at +0.01 compression ratio. Consequences here: the digest judge
+  sees the **whole digest state** when scoring, never isolated units, and
+  `recall` is the always-on restoration path.
+Compaction itself can be run the same way: instead of asking an LLM to
+summarize, ask a classifier per retained unit whether it is still needed —
+keep verbatim, truncate, or delete, with nothing ever reworded. pi's
+compaction hook returns one summary string rather than an edited message
+list, so that mechanic lands here as digest scoring (below) instead of
+message deletion.
 
 This is also the direction Codex CLI has taken in production: its
 experimental `context_management` mode does **no summarization at all** —
@@ -49,9 +74,10 @@ responsibility**:
 
 | Who decides | What | Mechanism | Grounding |
 | --- | --- | --- | --- |
-| Machine | what leaves the window | deterministic ARC digest, ingestion pruning | ARC 2607.25066, TokenPilot 2606.17016 |
-| Model | what survives verbatim | `note` tool, pinned into every digest | Codex notes; the machine can't know which fact is load-bearing |
-| Model, on demand | what comes back | `recall`: exact search → BM25 fallback → full entry read-back | 2608.12888 (raw-log search), 2608.16370 (re-derivation cost) |
+| Machine + classifier | what leaves the window | ARC digest skeleton; judge scores each step drop / keep / expand-verbatim | ARC 2607.25066, TokenPilot 2606.17016 |
+| Model + classifier | what survives verbatim | `note` tool pinned into every digest; judge expires stale notes on overflow | Codex notes; the machine can't know which fact is load-bearing |
+| Model, on demand | what comes back | `recall`: exact search → BM25 fallback → judge rerank → full entry read-back | 2608.12888 (raw-log search), 2608.16370 (re-derivation cost) |
+| Classifier, unprompted | what comes back at task start | memory gate: BM25 over the raw transcript, judge injects only confident hits | Zero-Mem 2607.29377 (zero-token memory ops) |
 | Machine | when the cut happens | early + idle compaction, pre-cut reminder to the model | ACM sawtooth, dsh compactNow, Codex budget reminder |
 
 ## 0. When compaction triggers (and why pi's default is too late locally)
@@ -144,7 +170,10 @@ namespace in pi terms. Three layers:
   about packet ordering") and a small local model is weak at query
   reformulation; BM25 (hand-rolled, in-memory, milliseconds on a
   few-thousand-entry corpus) absorbs that without giving up determinism
-  where it counts.
+  where it counts. With a judge configured the fuzzy candidates are
+  reranked first (`context.rerank`, fabric node `recall`): confidently
+  irrelevant snippets are dropped before a weak model chases them; exact
+  matches are never reranked.
 - **Entry read-back**: every result is labeled `[#N role ...]`; passing
   `entry: N` reads that entry **in full**, paged by `offsetChars` (Codex's
   `history.read_item`). A snippet tells you *where*, a read gives you the
@@ -184,7 +213,7 @@ for decisions and invariants.
 
 ## 4. Compaction modes (`context.mode`)
 
-### `"arc"` (default) — deterministic digest
+### `"arc"` (default) — deterministic digest, classifier-scored
 
 ARC's core result is that the *summarization model* is the weak link:
 paraphrase drops needles that deterministic stubs keep findable. So the
@@ -200,10 +229,47 @@ default compaction writes **no-LLM digest** of the compacted span:
 - a budget (~10k chars): oldest lines fall off first, and the recall footer
   covers everything omitted.
 
-Properties: **instant** (no model call — compaction latency goes from
-minutes on a local server to zero), **no paraphrase loss** (nothing is
-reworded, only elided — and everything elided is recoverable verbatim via
-`recall`), and **deterministic** (same span → same digest).
+Properties: **near-instant** (no LLM call — one classifier call at most),
+**no paraphrase loss** (nothing is reworded, only elided — and everything
+elided is recoverable verbatim via `recall`), and **deterministic** without
+a judge (same span → same digest).
+
+**Judge scoring** (`context.judgeDigest`, fabric node `compact`): the blind
+spot of the deterministic cut is that it keeps whatever is *newest* — a
+long-superseded detour survives while the exact error text the work still
+depends on gets stubbed to head/tail. When a judge is configured, one
+classifier call scores every non-user step of the digest on a 3-level
+scale — classifier-decided compaction under pi's summary-string constraint:
+
+- **drop** (score 0, confidence ≥ 0.6) — completed detours, superseded
+  attempts, noise; the digest notes how many were dropped and recall
+  recovers them;
+- **keep** (score 1) — the one-line step stays;
+- **expand** (score 2) — the step is rebuilt with a much larger verbatim
+  excerpt (~900 chars vs ~360): the exact error, value, path, or output
+  that is still load-bearing — the digest budget goes to what matters
+  instead of what's newest.
+
+Anti-dangling by construction: the judge sees the numbered digest as one
+state (dependencies visible), user lines are never candidates (they define
+the task, so text the human wrote is never removed), drops require
+confidence, and everything dropped remains one `recall` away — the
+restoration path the dangling paper had to train a classifier for. No
+judge, timeout, or rate cap = the untouched deterministic digest.
+
+Tier asymmetry: a drop removes content the deterministic digest would have
+*kept*, so drops act on **calibrated answers only** — the naive-llm
+fallback (self-reported probabilities, clamped but not calibrated) may
+expand a step, which only adds verbatim bytes, but never delete one.
+
+**Note expiry** (same switch, fabric node `notes`): pinned notes are
+newest-win under a ~4k budget, and blind recency can evict a constraint
+that still binds while keeping a stale one. On overflow, one judge call
+marks confidently-obsolete notes (superseded by a newer note, or about
+finished work) and only those are dropped — uncertainty keeps the note,
+and the newest note always survives. This is the classifier version of
+"merge": it cannot rewrite two notes into one, but it can drop the one the
+newer note supersedes.
 
 ### `"checkpoint"` — LLM-written structured checkpoint
 
@@ -227,19 +293,65 @@ deepseek-harness `compaction-basic`:
 ### `"off"` — pi's default compaction.
 
 Every compaction lands a `compaction` record in the consult-log
-(`reason`, summarizer or `deterministic`, `tokensBefore`, summary size,
-outcome, latency). `recall` calls made shortly after a compaction are a
-utilization signal: they mark exactly what the digest failed to carry
-forward — future training data for a better local summarizer.
+(`reason`, summarizer — `deterministic`, `deterministic+judge`, or the
+checkpoint model — `tokensBefore`, summary size, outcome, latency).
+`recall` calls made shortly after a compaction are a utilization signal:
+they mark exactly what the digest failed to carry forward — future
+training data for a better local summarizer.
+
+## 5. Task-start memory gate (`context.memory`)
+
+The remaining gap: after a compaction, the *next* task may depend on
+details that now live only in the raw transcript — and a cheap worker will
+re-read files or re-run commands to rediscover them (the re-derivation cost
+2608.16370 measures) rather than think to call `recall`. The memory gate
+closes it Zero-Mem style, with zero worker tokens spent deciding:
+
+1. On each new user task (once anything was compacted or pruned), BM25
+   searches the raw transcript with the task text — deterministic,
+   in-memory, milliseconds.
+2. One judge call (fabric node `memory`) scores every candidate: would
+   this materially help someone starting this task — a prior decision, an
+   exact value, an error already diagnosed, work already done?
+3. Only confident hits (p ≥ 0.75, max 2 snippets, hard-capped chars) are
+   steered into the turn, labeled as recovered history with a pointer to
+   verify via `recall`.
+
+The bar is deliberately the inverse of recall rerank: rerank drops only
+confident junk, because the model *asked* for those results; the gate
+injects only confident hits, because the model asked for nothing and a
+wrong injection costs context tokens on every turn after. Like all
+message-injecting machinery it only arms for `context.providers` sessions;
+a frontier main model is never fed speculative memory.
+
+Hallucination containment, since injection is the riskiest memory op:
+
+- **Nothing is generated.** Snippets are verbatim transcript bytes; the
+  gate can be *wrong about relevance*, never a source of invented facts.
+- **Calibrated tier only.** An injected snippet becomes a premise the
+  worker cannot distinguish from its own observations (small models treat
+  in-context text as ground truth — the distractor effect of Shi et
+  al. 2023 is exactly this). So the naive-llm fallback's self-reported
+  confidence never authorizes an injection: no judge, or fallback-tier
+  judge, means no injection — never a naive one.
+- **Provenance framing.** The steer is labeled as recovered history with
+  an explicit instruction to verify via `recall` before relying on it —
+  the snippet arrives as a *lead*, not an assertion.
+- **Bounded blast radius.** p ≥ 0.75, max 2 snippets, ~500 chars each,
+  deduped per session: a wrong injection is a few hundred stale-but-real
+  tokens, not a rewritten history.
 
 ## Configuration
 
 ```jsonc
 "context": {
-  "mode": "arc",                 // arc (deterministic, default) | checkpoint (LLM) | off
+  "mode": "arc",                 // arc (deterministic + judge-scored, default) | checkpoint (LLM) | off
   "compactAtTokens": 60000,      // early compaction while a local provider is active (0/unset = pi default)
   "idleCompactMinutes": 5,       // idle compaction past half the threshold (0/unset = off)
   "recall": true,                // transcript search + entry read-back (default on)
+  "rerank": true,                // judge-rerank fuzzy BM25 recall results (default on)
+  "judgeDigest": true,           // judge scores digest steps drop/keep/expand + note expiry (default on)
+  "memory": true,                // task-start memory gate: steer confident compacted history back in (default on)
   "notes": true,                 // note tool + verbatim digest pinning (default on)
   "reminderTokens": 8000,        // pre-compaction reminder lead (0 = off)
   "pruner": true,                // ingestion-time trim of big shell outputs (default on)
@@ -252,3 +364,6 @@ forward — future training data for a better local summarizer.
 ```
 
 Cycle the mode and toggle pruner/recall/notes from `/geocine context`.
+The judge nodes (`compact`, `notes`, `memory`, `recall`) share the fabric's
+rate cap and trace their calls as training rows — see
+[training-data.md](training-data.md).

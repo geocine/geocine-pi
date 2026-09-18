@@ -267,6 +267,21 @@ export interface ContextConfig {
 	 * reranked. No judge = results pass through. Default true.
 	 */
 	rerank?: boolean;
+	/**
+	 * Judge-scored arc digest and note expiry: at compaction, one classifier
+	 * call scores every non-user digest step drop / keep one-line / expand
+	 * verbatim (instead of the blind newest-first cut), and overflowing
+	 * pinned notes are expired by staleness instead of age. No judge = the
+	 * plain deterministic digest. Default true.
+	 */
+	judgeDigest?: boolean;
+	/**
+	 * Task-start memory gate: after a compaction or pruning, BM25-search the
+	 * raw transcript with each new task and steer in snippets the judge
+	 * scores as confidently relevant (max 2). No judge = inject nothing.
+	 * Default true.
+	 */
+	memory?: boolean;
 }
 
 export interface QwenConfig {

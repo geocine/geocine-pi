@@ -215,6 +215,14 @@ The fabric nodes today:
   keyword fallback returns candidates, the judge scores each for relevance
   and drops the confidently irrelevant ones (a weak model otherwise chases
   junk snippets). Exact matches are never reranked.
+- **Compaction scoring** — at every arc compaction, one call scores each
+  non-user digest step drop / keep one-line / expand verbatim, and expires
+  stale pinned notes when they overflow. See
+  [Context-keeper](#context-keeper).
+- **Memory gate** — at task start after anything was compacted or pruned,
+  BM25 candidates from the raw transcript are scored and only
+  confidently-relevant snippets are steered in. See
+  [Context-keeper](#context-keeper).
 - **Consult routing** — when the worker calls `consult` without naming a
   model, the judge assigns one from the registry by role, capability
   `classes`, cost, and guardrail fit — cheapest model that covers the
@@ -236,8 +244,26 @@ runs — a session never breaks because the classifier is missing.
   interface (`lib/judge/types.ts`), so the classifier is replaceable — e.g.
   a future local classifier head or fine-tuned LoRA — without touching call
   sites.
-- `judge.model` — model alias, default `jev-latest`.
-- `judge.apiKeyEnv` — env var holding the key, default `TYPESAFE_API_KEY`.
+- `judge.baseUrl` — classifier host. An origin (evaluate path filled in
+  from the host) or a full evaluate URL:
+  - Official TypeSafe (default): `https://api.typesafe.ai` →
+    `POST /v1/systemone`, model `jev-latest`, key `TYPESAFE_API_KEY`.
+  - OpenRouter: `https://openrouter.ai` → `POST /api/alpha/decisions`,
+    model `~typesafe/jev-latest`
+    ([openrouter.ai/~typesafe/jev-latest](https://openrouter.ai/~typesafe/jev-latest)),
+    key `OPENROUTER_API_KEY`.
+  - Any other host: set `baseUrl` to that host's full evaluate URL
+    (same `{state, model, questions}` body).
+- `judge.model` — model alias. Default `jev-latest` on TypeSafe,
+  `~typesafe/jev-latest` on OpenRouter. Set it when you pin a version
+  (`jev-1.13.0`, `typesafe/jev-1.13`) or point at another host.
+- `judge.apiKeyEnv` — env var holding the key. Default `TYPESAFE_API_KEY`,
+  or `OPENROUTER_API_KEY` when `baseUrl` is an OpenRouter host.
+- `judge.maxInputTokens` — cap on serialized state+questions sent to Jev.
+  Jev's input window is **32k tokens** (OpenRouter lists 32k; TypeSafe:
+  32k for `state` plus the longest question, 64k for the whole request).
+  Oversized state is clipped (head+tail on the longest strings) so a
+  large gate/prescreen payload cannot 413 the call. Default 32000.
 - `judge.timeoutMs` — per-call budget before falling back, default 4000.
 - `judge.minConfidence` — floor for overruling deterministic heuristics,
   default 0.55.
@@ -247,7 +273,10 @@ runs — a session never breaks because the classifier is missing.
 - `judge.fallback` — the naive-llm tier: `baseUrl` (OpenAI-compatible,
   e.g. `http://127.0.0.1:8080/v1`; unset = no tier), `model`, `apiKeyEnv`,
   `maxTokens` (default 500). Runs when the primary is unconfigured, times
-  out, errors, or answers unusably.
+  out, errors, or answers unusably. Its answers are marked uncalibrated:
+  they may block, rerank, and route (counterfactual: a heuristic), but
+  context-mutating actions — memory-gate injections and digest step drops
+  — refuse this tier and act on calibrated answers only.
 - `judge.trace` — default true: every answered call, whichever tier
   answered it, appends one **ready-to-train row** to
   `<logDir>/judge-YYYY-MM.jsonl`:
@@ -439,6 +468,40 @@ a `tool_guard` record (tool, call, trigger, wastefulP, blocked).
 - `context.mode` — compaction style: `"arc"` (deterministic digest, no
   model call, default), `"checkpoint"` (LLM-written structured checkpoint),
   or `"off"` (pi default).
+- `context.judgeDigest` — classifier-scored arc compaction (classifier
+  decisions instead of LLM summarization, under pi's summary-string
+  constraint): one judge call scores
+  every non-user digest step **drop** (a completed detour; recall recovers
+  it) / **keep** the one-liner / **expand to a verbatim excerpt** (the
+  exact error, value, or output is still load-bearing), so the digest
+  budget goes to what matters instead of what is newest. The judge sees the
+  whole digest state, never isolated units — independent unit scoring is
+  how hard compressors split dependency pairs ("referential dangling",
+  [arXiv:2608.04569](https://arxiv.org/abs/2608.04569)); user lines are
+  never candidates, drops need confidence ≥ 0.6 **from the calibrated tier
+  only** (the naive-llm fallback may expand — a verbatim add — but never
+  delete), and the recall tool remains the restoration path for anything
+  dropped. The same switch also covers **note expiry**: when pinned notes
+  overflow `NOTES_BUDGET`, the judge drops confidently-stale ones instead
+  of blind newest-win. No judge = the plain deterministic digest. Default
+  on.
+- `context.memory` — task-start memory gate ([Zero-Mem](https://arxiv.org/abs/2607.29377)'s
+  zero-token regime: deterministic retrieval proposes, a classifier
+  disposes, the worker LLM never spends tokens operating memory). Once
+  anything was compacted or pruned, each new task BM25-searches the raw
+  transcript and one judge call scores the candidates; only
+  confidently-relevant snippets (p ≥ 0.75, max 2, hard-capped chars) are
+  steered in, so a cheap worker doesn't re-read files or re-run commands
+  to rediscover earlier work. The bar is the inverse of recall rerank:
+  rerank drops only confident junk (the model asked for those results),
+  the gate injects only confident hits (the model asked for nothing).
+  Injection additionally requires the **calibrated tier**: an injected
+  snippet becomes a premise the worker cannot distinguish from its own
+  observations, so the naive-llm fallback's self-reported confidence never
+  authorizes one. Snippets are verbatim transcript bytes labeled as
+  recovered history with a verify-via-recall instruction — the gate can
+  mislead by staleness at worst, never by fabrication. No judge = inject
+  nothing. Default on.
 - `context.recall` — the transcript search tool (exact regex primary, BM25
   fallback on zero matches, full entry read-back via `entry`/`offsetChars`).
   Default on.

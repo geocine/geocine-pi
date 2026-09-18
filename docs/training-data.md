@@ -61,9 +61,9 @@ head share one format: train/serve parity by construction.
 `source` separates calibrated Jev labels from `naive-llm` ones, so weak
 labels can be filtered or down-weighted at training time. Once your head
 is trained, repoint `judge.provider` at it and every fabric decision —
-triage, watchdog, gate, guard, toolcall, recall, routing, prescreen — runs locally at zero
-marginal cost. `/geocine judge` shows per-node call stats and the trace
-location.
+triage, watchdog, gate, guard, toolcall, recall, compact, notes, memory,
+routing, prescreen — runs locally at zero marginal cost. `/geocine judge`
+shows per-node call stats and the trace location.
 
 ## Rescue episodes
 

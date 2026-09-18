@@ -12,7 +12,10 @@
 // self-reported probs are clamped to <= 0.85 so this tier can never
 // out-shout calibrated sources, and its trace rows carry a "naive-llm"
 // source so they are separable (filtered or down-weighted) at training
-// time.
+// time. It is also marked calibrated: false — clamping bounds how loud it
+// is, not whether it is right, so call sites whose action MUTATES the
+// worker's context (memory-gate injection, digest step drops) refuse this
+// tier outright and act only on calibrated answers.
 
 import { schemaPromptBlock, toContext, toSchema, type TrainingField } from "./serialize.ts";
 import type { JudgeAnswer, JudgeBackend, JudgeRequest, JudgeSettings } from "./types.ts";
@@ -79,6 +82,7 @@ function parseLenient(text: string): Record<string, unknown> | undefined {
 
 export const naiveLlmJudge: JudgeBackend = {
 	id: "naive-llm",
+	calibrated: false, // self-reported probs; may veto/filter, never authorize context mutation
 
 	configured(cfg: JudgeSettings) {
 		return Boolean(cfg.baseUrl);

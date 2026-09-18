@@ -24,6 +24,7 @@ function isAnswer(value: unknown): value is JudgeAnswer {
 
 export const typesafeJudge: JudgeBackend = {
 	id: "typesafe",
+	calibrated: true,
 
 	configured(cfg) {
 		return Boolean(apiKey(cfg));

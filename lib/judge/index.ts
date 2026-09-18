@@ -211,7 +211,7 @@ export async function judge(
 			node.totalMs += result.elapsedMs;
 			if (index > 0) node.fellBack++;
 			traceCall(cfg ?? {}, nodeId, `${tier.backend.id}:${result.model}`, req, result);
-			return result;
+			return { ...result, calibrated: tier.backend.calibrated };
 		} catch {
 			// fall through to the next tier
 		} finally {

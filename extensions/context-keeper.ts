@@ -60,7 +60,7 @@ import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { type ContextConfig, DEFAULT_CONTEXT_PROVIDERS, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
-import { judge, noulOf } from "../lib/judge/index.ts";
+import { judge, noulOf, scoreOf } from "../lib/judge/index.ts";
 
 const PRUNED_STASH_TYPE = "geocine-pruned";
 const NOTE_TYPE = "geocine-note";
@@ -418,19 +418,180 @@ function messageLine(m: Record<string, unknown>): string | undefined {
 const RECALL_FOOTER =
 	"\n\n(Older context was compacted away. The full raw transcript is still searchable with the recall tool — use it before re-reading files or re-running commands to recover details like exact error text, earlier tool output, or prior decisions.)";
 
+/** Digest line paired with its source message, for judge-directed expansion. */
+interface DigestPair {
+	line: string;
+	msg: Record<string, unknown>;
+}
+
+function digestPairs(all: Array<Record<string, unknown>>): DigestPair[] {
+	const pairs: DigestPair[] = [];
+	for (const m of all) {
+		const line = messageLine(m);
+		if (line) pairs.push({ line, msg: m });
+	}
+	return pairs;
+}
+
+/** Verbatim expansion of one step ("store"): same line shape, much larger
+ *  excerpt — used when the judge says the exact contents are still needed. */
+function expandedLine(m: Record<string, unknown>): string | undefined {
+	const role = String(m.role ?? "");
+	const blocks: TextBlock[] = Array.isArray(m.content)
+		? (m.content as TextBlock[])
+		: typeof m.content === "string"
+			? [{ type: "text", text: m.content }]
+			: [];
+	const texts = blocksText(blocks);
+	if (role === "toolResult") {
+		const name = String(m.toolName ?? "tool");
+		const err = m.isError ? " ERROR" : "";
+		return `[${name}${err} — kept verbatim] ${headTail(texts, 450, 450)}`;
+	}
+	if (role === "bashExecution") return `[bash] ${flat(String(m.command ?? ""), 400)}`;
+	if (texts) return `[${role} — kept verbatim] ${flat(texts, 800)}`;
+	return undefined;
+}
+
+// Judge-scored digest (fabric node "compact"): classifier-decided
+// compaction under pi's constraint that compaction returns one summary text.
+// Instead of dropping digest steps oldest-first, one classifier call scores
+// every non-user step 0/1/2 — drop (no longer needed; recall recovers it),
+// keep the one-liner, or EXPAND to a verbatim excerpt (the exact error/value
+// is still load-bearing). The judge sees the WHOLE digest state, not
+// isolated units — scoring units independently is how hard compressors
+// split dependency pairs (referential dangling, arXiv:2608.04569); user
+// lines are never candidates (they define the task), and everything dropped
+// stays recoverable via recall, which is the restoration path the dangling
+// paper had to bolt on. Drops additionally require a CALIBRATED tier
+// (naive-llm may expand, never delete). No judge / timeout / rate cap =
+// untouched lines.
+const DIGEST_JUDGE_MAX = 36; // newest candidates scored; older fall to the budget as before
+const DIGEST_DROP_CONFIDENCE = 0.6;
+
+async function judgeDigestLines(
+	cwd: string,
+	pairs: DigestPair[],
+	signal: AbortSignal | undefined,
+): Promise<{ lines: string[]; dropped: number; expanded: number } | undefined> {
+	const full = loadConfig(cwd);
+	if (full.context?.judgeDigest === false) return undefined;
+	const candidates: number[] = [];
+	for (let i = 0; i < pairs.length; i++) {
+		if (!pairs[i].line.startsWith("[user]")) candidates.push(i);
+	}
+	const scored = candidates.slice(-DIGEST_JUDGE_MAX);
+	if (scored.length < 6) return undefined; // not worth a call
+
+	const questions: Record<string, { type: "score"; instructions: string; criteria: string[] }> = {};
+	for (const i of scored) {
+		questions[`s${i}`] = {
+			type: "score",
+			instructions: `Step ${i} of the digest: is it still needed for the remaining work?`,
+			criteria: [
+				"no longer needed — a completed detour, superseded attempt, or noise; safe to drop (the recall tool recovers it)",
+				"keep as this one-line step — knowing it happened still matters",
+				"exact contents still needed — expand to a verbatim excerpt (error text, value, path, or output the work still depends on)",
+			],
+		};
+	}
+	const result = await judge(
+		full.judge,
+		{
+			state: {
+				task: "This is a compaction digest of a coding session, one numbered step per line. Steps marked [user] define the task and are always kept.",
+				steps: pairs.map((p, i) => `${i}: ${p.line.slice(0, 220)}`).join("\n"),
+			},
+			questions,
+		},
+		{ node: "compact", timeoutMs: 6000, signal },
+	);
+	if (!result) return undefined;
+
+	// Drops remove content the deterministic digest would have KEPT, so they
+	// need calibrated probabilities — the naive-llm tier's self-reported
+	// confidence may expand (verbatim add, harmless) but never delete.
+	const canDrop = result.calibrated === true;
+	let dropped = 0;
+	let expanded = 0;
+	const lines: string[] = [];
+	for (let i = 0; i < pairs.length; i++) {
+		const answer = scoreOf(result, `s${i}`);
+		if (!answer) {
+			lines.push(pairs[i].line);
+			continue;
+		}
+		if (canDrop && answer.score <= 0.5 && answer.confidence >= DIGEST_DROP_CONFIDENCE) {
+			dropped++;
+			continue;
+		}
+		if (answer.score >= 1.5) {
+			const big = expandedLine(pairs[i].msg);
+			lines.push(big ?? pairs[i].line);
+			if (big) expanded++;
+			continue;
+		}
+		lines.push(pairs[i].line);
+	}
+	return { lines, dropped, expanded };
+}
+
+// Judge-gated note expiry (fabric node "notes"): pinned notes are verbatim
+// and newest-win under a char budget — blind recency can evict a constraint
+// that still binds while keeping a stale one. When notes overflow, one
+// classifier call marks confidently-obsolete notes ("merge/remove": the
+// classifier cannot rewrite two notes into one, but it can drop the one the
+// newer note supersedes). Uncertainty keeps the note; no judge = newest-win.
+async function judgeExpireNotes(
+	cwd: string,
+	goal: string,
+	notes: string[],
+	signal: AbortSignal | undefined,
+): Promise<string[]> {
+	const full = loadConfig(cwd);
+	if (full.context?.judgeDigest === false) return notes;
+	const totalChars = notes.reduce((s, n) => s + n.length, 0);
+	if (notes.length < 6 || totalChars <= NOTES_BUDGET) return notes;
+	const questions: Record<string, { type: "noul"; instructions: string; criteria: { true: string; false: string } }> = {};
+	for (let i = 0; i < notes.length; i++) {
+		questions[`n${i}`] = {
+			type: "noul",
+			instructions: `Is note n${i} still load-bearing for the ongoing work?`,
+			criteria: {
+				true: "Still binds: a live constraint, decision, value, or gotcha",
+				false: "Obsolete: superseded by a newer note or about finished work",
+			},
+		};
+	}
+	const result = await judge(
+		full.judge,
+		{
+			state: {
+				goal: goal.slice(0, 600),
+				notes: notes.map((n, i) => `n${i} (${i === notes.length - 1 ? "newest" : `age ${notes.length - 1 - i}`}): ${n.slice(0, 300)}`).join("\n"),
+			},
+			questions,
+		},
+		{ node: "notes", timeoutMs: 4000, signal },
+	);
+	if (!result) return notes;
+	const kept = notes.filter((_, i) => {
+		const p = noulOf(result, `n${i}`);
+		return p === undefined || p > 0.35;
+	});
+	// Never expire everything; the newest note always survives.
+	return kept.length > 0 ? kept : notes.slice(-1);
+}
+
 /** Deterministic compaction summary: no model call, no paraphrase loss.
  *  Pinned notes survive verbatim; action lines are budgeted (oldest drop
  *  first) and the recall tool covers everything omitted. */
 function arcDigest(
-	all: Array<Record<string, unknown>>,
+	lines: string[],
 	previousSummary: string | undefined,
 	notes: string[],
+	judgeNote?: string,
 ): string {
-	const lines: string[] = [];
-	for (const m of all) {
-		const line = messageLine(m);
-		if (line) lines.push(line);
-	}
 	const pinned = renderPinnedNotes(notes);
 	let prev = "";
 	if (previousSummary) {
@@ -466,6 +627,7 @@ function arcDigest(
 	if (pinned) parts.push(`\n${pinned}`);
 	if (prev) parts.push(`\n--- Carried forward from an earlier compaction ---\n${prev}`);
 	parts.push("\n--- Action log ---");
+	if (judgeNote) parts.push(judgeNote);
 	if (omitted > 0) parts.push(`... ${omitted} earlier steps omitted (searchable via recall)`);
 	parts.push(kept.join("\n"));
 	return parts.join("\n") + RECALL_FOOTER;
@@ -551,6 +713,97 @@ export default function contextKeeper(pi: ExtensionAPI) {
 			},
 			{ deliverAs: "steer" },
 		);
+	});
+
+	// -- task-start memory gate (fabric node "memory") --
+	//
+	// Zero-Mem's regime (arXiv:2607.29377) applied at task start: once a
+	// compaction or pruning has happened, details a NEW task depends on may
+	// live only in the raw transcript — and a cheap worker will re-read files
+	// or re-run commands to rediscover them. Deterministic retrieval (BM25,
+	// query = the task text) proposes candidates; one judge call scores
+	// relevance; only confidently-relevant snippets are steered in, hard-
+	// capped. The bar is the inverse of recall rerank: rerank drops only
+	// confident junk (the model asked for those results), the gate injects
+	// only confident hits (the model asked for nothing). No judge = inject
+	// nothing — a wrong injection costs context tokens on every turn after.
+	const MEMORY_INJECT_P = 0.75;
+	const MEMORY_MAX_SNIPPETS = 2;
+	const injectedMemory = new Set<string>(); // entry ids already steered in; never repeat
+	pi.on("input", async (event, ctx) => {
+		const text = typeof (event as { text?: unknown }).text === "string" ? (event as { text: string }).text : "";
+		if (!text || text.startsWith("/") || text.length < 24) return;
+		const full = loadConfig(ctx.cwd);
+		const cfg = full.context ?? {};
+		if (cfg.memory === false || !keeperApplies(ctx, cfg)) return;
+		const entries = ctx.sessionManager.getEntries() as EntryLike[];
+		const compacted = entries.some(
+			(e) =>
+				(e.type === "message" && (e.message as { role?: string } | undefined)?.role === "compactionSummary") ||
+				(e.type === "custom" && e.customType === PRUNED_STASH_TYPE),
+		);
+		if (!compacted) return; // everything is still in context
+
+		// Fire and forget: the hits land as a steer while turn 1 runs.
+		void (async () => {
+			const ranked = bm25Search(entries, text, 5).filter((r) => {
+				const id = /#\d+/.exec(r)?.[0];
+				return !id || !injectedMemory.has(id);
+			});
+			if (ranked.length === 0) return;
+			const questions: Record<string, { type: "noul"; instructions: string; criteria: { true: string; false: string } }> = {};
+			for (let i = 0; i < ranked.length; i++) {
+				questions[`m${i}`] = {
+					type: "noul",
+					instructions: `Result m${i} was retrieved from this coding session's compacted history because it shares keywords with the NEW task. Would its contents materially help someone starting that task — a prior decision, an exact value, an error already diagnosed, work already done?`,
+					criteria: {
+						true: "Materially helps: the new task builds on or repeats this",
+						false: "Coincidental keyword overlap; the new task does not need it",
+					},
+				};
+			}
+			const result = await judge(
+				full.judge,
+				{
+					state: {
+						new_task: text.slice(0, 500),
+						results: Object.fromEntries(ranked.map((r, i) => [`m${i}`, r.slice(0, 450)])),
+					},
+					questions,
+				},
+				{ node: "memory", timeoutMs: 3000 },
+			);
+			// Injection mutates what the worker reads for the rest of the
+			// session — a wrong snippet is a false premise it cannot detect.
+			// Only calibrated probabilities may authorize it; the naive-llm
+			// tier's self-reported 0.85 must never put words in the context.
+			if (!result?.calibrated) return;
+			const hits = ranked
+				.map((r, i) => ({ r, p: noulOf(result, `m${i}`) }))
+				.filter((h): h is { r: string; p: number } => h.p !== undefined && h.p >= MEMORY_INJECT_P)
+				.sort((a, b) => b.p - a.p)
+				.slice(0, MEMORY_MAX_SNIPPETS);
+			if (hits.length === 0) return;
+			for (const h of hits) {
+				const id = /#\d+/.exec(h.r)?.[0];
+				if (id) injectedMemory.add(id);
+			}
+			try {
+				pi.sendMessage(
+					{
+						customType: "context-keeper-memory",
+						content:
+							"[memory] Earlier work in this session (compacted out of context) looks relevant to this task — verify with the recall tool before relying on it:\n\n" +
+							hits.map((h) => h.r.slice(0, 500)).join("\n\n"),
+						display: false,
+					},
+					{ deliverAs: "steer" },
+				);
+				ctx.ui.setStatus("context-keeper", `memory: ${hits.length} snippet${hits.length > 1 ? "s" : ""} recalled`);
+			} catch {
+				// steer window closed; the next turn can still use recall
+			}
+		})();
 	});
 
 	// -- note tool: model-written durable state, pinned into every digest --
@@ -752,7 +1005,10 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		const { messagesToSummarize, turnPrefixMessages, tokensBefore, firstKeptEntryId, previousSummary } = preparation;
 		const all = [...messagesToSummarize, ...turnPrefixMessages];
 		if (all.length === 0) return;
-		const notes = cfg.notes === false ? [] : collectNotes(ctx.sessionManager.getEntries() as EntryLike[]);
+		const pairs = digestPairs(all as unknown as Array<Record<string, unknown>>);
+		const goal = [...pairs].reverse().find((p) => p.line.startsWith("[user]"))?.line.slice(7, 607) ?? "";
+		let notes = cfg.notes === false ? [] : collectNotes(ctx.sessionManager.getEntries() as EntryLike[]);
+		notes = await judgeExpireNotes(ctx.cwd, goal, notes, signal);
 
 		const log = (
 			outcome: "arc" | "custom" | "fallback_empty" | "fallback_error" | "fallback_not_smaller",
@@ -778,10 +1034,17 @@ export default function contextKeeper(pi: ExtensionAPI) {
 			});
 		};
 
-		// --- arc mode: deterministic, no model call, effectively instant ---
+		// --- arc mode: deterministic skeleton, judge-scored content ---
+		// The classifier (when configured) decides drop/keep/expand per step;
+		// without it the digest is exactly the deterministic newest-first cut.
 		if (mode === "arc") {
-			const summary = arcDigest(all as unknown as Array<Record<string, unknown>>, previousSummary, notes);
-			log("arc", "deterministic", summary.length);
+			const judged = await judgeDigestLines(ctx.cwd, pairs, signal);
+			const lines = judged?.lines ?? pairs.map((p) => p.line);
+			const judgeNote = judged
+				? `(classifier-scored: ${judged.dropped} stale steps dropped — recall recovers them — ${judged.expanded} kept verbatim)`
+				: undefined;
+			const summary = arcDigest(lines, previousSummary, notes, judgeNote);
+			log("arc", judged ? "deterministic+judge" : "deterministic", summary.length);
 			return {
 				compaction: {
 					summary,

@@ -78,6 +78,15 @@ export interface JudgeResult {
 	model: string;
 	elapsedMs: number;
 	usage?: { inputTokens?: number; outputTokens?: number };
+	/**
+	 * Set by the dispatcher from the answering tier's backend. Actions that
+	 * MUTATE the worker's context on the judge's say-so alone (memory-gate
+	 * injections, digest step drops) must require this; uncalibrated
+	 * self-reported probabilities are not grounds to alter what a model
+	 * reads. Threshold checks (blocks, reranks, routing) may act on any
+	 * tier — their counterfactual is a heuristic, not retention.
+	 */
+	calibrated?: boolean;
 }
 
 export interface JudgeSettings {
@@ -139,6 +148,12 @@ export interface JudgeSettings {
 export interface JudgeBackend {
 	/** Stable id used as judge.provider in geocine.json. */
 	id: string;
+	/**
+	 * True when the backend's probabilities are calibrated (a trained
+	 * classifier head), false for self-reported ones (naive-llm). Gates
+	 * context-mutating actions — see JudgeResult.calibrated.
+	 */
+	calibrated: boolean;
 	/** Cheap static check: false means judge() would certainly fail. */
 	configured(cfg: JudgeSettings): boolean;
 	/** One evaluation call. May throw; index.ts converts to undefined. */

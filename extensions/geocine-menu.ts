@@ -331,7 +331,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 					`judge: ${onOff(next)} (persisted)`,
 					`state: ${judgeStatus({ ...(cfg.judge ?? {}), enabled: next })}`,
 					`trace: ${cfg.judge?.trace === false ? "OFF" : `ON → ${cfg.judge?.traceDir ?? "consult-log"}/judge-YYYY-MM.jsonl (offline-classifier training data)`}`,
-					"Decision fabric nodes: watchdog (stuck/drift, every turn), triage (task difficulty + route), gate (outcome: continue/stop/escalate + revert), guard (destructive-command risk), toolcall (wasteful repeats/retries from local workers), recall (rerank fuzzy transcript-search results), route (assigns the model per consult), approve (auto-approves clear consults), prescreen (refusal risk). Heuristics and pi's own approvals remain the fallbacks.",
+					"Decision fabric nodes: watchdog (stuck/drift, every turn), triage (task difficulty + route), gate (outcome: continue/stop/escalate + revert), guard (destructive-command risk), toolcall (wasteful repeats/retries from local workers), recall (rerank fuzzy transcript-search results), compact (drop/keep/expand per digest step), notes (expire stale pinned notes), memory (steer compacted history into new tasks), route (assigns the model per consult), approve (auto-approves clear consults), prescreen (refusal risk). Heuristics and pi's own approvals remain the fallbacks.",
 					...judgeFabricStats().map((line) => `  ${line}`),
 				].join("\n"),
 				"info",

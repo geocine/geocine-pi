@@ -28,13 +28,14 @@
   <text x="134" y="184" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">local or cheap cloud — steered only while cheap</text>
 
   <!-- CONTEXT KEEPER (teal) -->
-  <rect x="22" y="224" width="224" height="126" rx="8" fill="#0f131a" stroke="#95e6cb" stroke-width="1.5"/>
+  <rect x="22" y="224" width="224" height="140" rx="8" fill="#0f131a" stroke="#95e6cb" stroke-width="1.5"/>
   <text x="134" y="246" text-anchor="middle" font-size="12" font-weight="700" fill="#95e6cb">CONTEXT KEEPER</text>
   <text x="134" y="264" text-anchor="middle" font-size="10" fill="#8a9199">prunes oversized tool output at ingest</text>
   <text x="134" y="279" text-anchor="middle" font-size="10" fill="#8a9199">recall: search the full raw transcript</text>
   <text x="134" y="294" text-anchor="middle" font-size="10" fill="#8a9199">notes pinned verbatim across compactions</text>
-  <text x="134" y="315" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">deterministic ARC digest · compacts early + idle</text>
-  <text x="134" y="331" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">compaction is never lossy</text>
+  <text x="134" y="309" text-anchor="middle" font-size="10" fill="#8a9199">memory gate steers history into new tasks</text>
+  <text x="134" y="330" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">judge-scored digest · compacts early + idle</text>
+  <text x="134" y="346" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">compaction is never lossy</text>
 
   <!-- local to keeper (session stream down, pruned view + recall back) -->
   <path d="M120,198 L120,224" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
@@ -141,15 +142,17 @@
   <text x="321" y="597" text-anchor="middle" font-size="9" fill="#565b66">trigger families, lenient reroute</text>
 
   <rect x="422" y="554" width="184" height="54" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
-  <text x="514" y="570" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">recall rerank</text>
-  <text x="514" y="584" text-anchor="middle" font-size="9" fill="#8a9199">fuzzy recall hits scored for relevance</text>
-  <text x="514" y="597" text-anchor="middle" font-size="9" fill="#565b66">confidently irrelevant → dropped</text>
+  <text x="514" y="570" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">memory</text>
+  <text x="514" y="584" text-anchor="middle" font-size="9" fill="#8a9199">digest drop/keep/expand · note expiry</text>
+  <text x="514" y="597" text-anchor="middle" font-size="9" fill="#565b66">recall rerank · task-start gate</text>
 
   <text x="321" y="624" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">one judge() · rate cap · per-node ledger · ladder: calibrated classifier → naive-llm (local, clamped) → heuristics</text>
 
-  <!-- keeper/worker events into fabric -->
-  <path d="M134,350 L134,398" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
-  <text x="142" y="378" font-size="10" fill="#565b66">turns · tools · diffs</text>
+  <!-- keeper/worker events into fabric; fabric scores back to the keeper -->
+  <path d="M134,364 L134,398" stroke="#565b66" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="126" y="384" text-anchor="end" font-size="9" fill="#565b66">turns · tools · digests</text>
+  <path d="M200,398 L200,364" stroke="#e6b450" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrowg)"/>
+  <text x="208" y="384" font-size="9" fill="#e6b450">drop/keep/expand</text>
 
   <!-- fabric steers back to worker (corridor between columns) -->
   <path d="M290,398 L290,186 Q290,178 282,178 L246,178" stroke="#e6b450" stroke-width="1.5" fill="none" stroke-dasharray="4 3" marker-end="url(#arrowg)"/>
@@ -167,7 +170,7 @@
   <rect x="37" y="698" width="280" height="46" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
   <text x="177" y="712" text-anchor="middle" font-size="10" font-weight="600" fill="#d2a6ff">consult-log</text>
   <text x="177" y="725" text-anchor="middle" font-size="9" fill="#8a9199">requests · approvals · overrides · refusals</text>
-  <text x="177" y="737" text-anchor="middle" font-size="9" fill="#565b66">watchdog / triage / gate / guard / tool-guard</text>
+  <text x="177" y="737" text-anchor="middle" font-size="9" fill="#565b66">watchdog / triage / gate / guard / tool-guard / compaction</text>
 
   <rect x="329" y="698" width="280" height="46" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
   <text x="469" y="712" text-anchor="middle" font-size="10" font-weight="600" fill="#d2a6ff">judge trace</text>
