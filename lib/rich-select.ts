@@ -21,6 +21,8 @@ export interface RichSelectOptions {
 	maxVisible?: number;
 	/** Minimum width of the label column, so rows align. Default 16. */
 	labelWidth?: number;
+	/** Maximum width of the label column before labels truncate. Default 40. */
+	maxLabelWidth?: number;
 }
 
 /**
@@ -51,7 +53,11 @@ export async function richSelect(
 				scrollInfo: (t) => theme.fg("dim", t),
 				noMatch: (t) => theme.fg("warning", t),
 			},
-			{ minPrimaryColumnWidth: opts?.labelWidth ?? 16 },
+			// Passing only minPrimaryColumnWidth makes SelectList clamp the
+			// column to EXACTLY that width (a lone bound is used as min AND
+			// max), truncating longer labels. Give a real max so the column
+			// auto-sizes to the widest label.
+			{ minPrimaryColumnWidth: opts?.labelWidth ?? 16, maxPrimaryColumnWidth: opts?.maxLabelWidth ?? 40 },
 		);
 		list.onSelect = (item) => done(item.value);
 		list.onCancel = () => done(null);

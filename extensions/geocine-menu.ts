@@ -14,6 +14,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
+import {
+	type Component,
+	Container,
+	type SettingItem,
+	SettingsList,
+	type SettingsListTheme,
+	Text,
+} from "@earendil-works/pi-tui";
 import { offlineModels } from "../lib/availability.ts";
 import {
 	CONFIG_FILE,
@@ -196,6 +205,268 @@ async function editConfig(ctx: ExtensionContext): Promise<void> {
 	fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
 	fs.writeFileSync(CONFIG_FILE, edited, "utf8");
 	ctx.ui.notify("Config saved. Applies immediately (extensions re-read it per event).", "info");
+}
+
+// Hub sections that leave the panel to run their own flow (richSelect
+// chains, the config editor). Everything else changes in place.
+type HubExit = "models" | "harness" | "data" | "config";
+
+function onOffValue(v: boolean): string {
+	return v ? "ON" : "OFF";
+}
+
+function contextSummary(cfg: GeocineConfig): string {
+	const c = cfg.context ?? {};
+	const mode = c.mode ?? (c.checkpoint === false ? "off" : "arc");
+	return `${mode.toUpperCase()} · pruner ${onOffValue(c.pruner !== false)} · recall ${onOffValue(c.recall !== false)}`;
+}
+
+/**
+ * The /geocine hub as a persistent settings panel (same machinery as pi's
+ * /settings): enter cycles a row's value IN PLACE and the cursor stays on
+ * the row — no close-and-reopen, so the selection never jumps back to the
+ * top. Approval and the context keeper are nested submenus; SettingsList
+ * restores the cursor to their row when they close. Only the rows returned
+ * as HubExit close the panel, because their flows need the full screen.
+ */
+async function hubPanel(ctx: ExtensionContext, initial?: Section): Promise<HubExit | null> {
+	const cfg = loadConfig(ctx.cwd);
+	const total = Object.keys(cfg.models).length;
+	const defaultName = defaultModelName(cfg);
+	const defaultLabel = defaultName ? modelLabel(cfg.models[defaultName]) : "none";
+	const approvalMode = cfg.approval?.consultTool ?? "ask";
+	const autoApproved = Object.entries(cfg.models)
+		.filter(([, c]) => c.autoApprove)
+		.map(([n]) => n);
+
+	return await ctx.ui.custom<HubExit | null>((tui, theme, _keybindings, done) => {
+		const listTheme: SettingsListTheme = {
+			label: (t, selected) => (selected ? theme.fg("accent", theme.bold(t)) : t),
+			value: (t, selected) => (selected ? theme.fg("accent", t) : theme.fg("muted", t)),
+			description: (t) => theme.fg("muted", t),
+			cursor: theme.fg("accent", "> "),
+			hint: (t) => theme.fg("dim", t),
+		};
+
+		// A submenu is a heading + its own SettingsList; input goes to the
+		// list (the outer list delegates while a submenu is open).
+		function submenu(title: string, items: SettingItem[], onChange: (id: string, value: string) => void, onClose: () => void): Component {
+			const box = new Container();
+			box.addChild(new Text(theme.fg("accent", theme.bold(title))));
+			const list = new SettingsList(items, Math.min(items.length, 10), listTheme, onChange, onClose);
+			box.addChild(list);
+			return {
+				render: (width: number) => box.render(width),
+				invalidate: () => box.invalidate(),
+				handleInput: (data: string) => list.handleInput(data),
+			};
+		}
+
+		const items: SettingItem[] = [
+			{
+				id: "models",
+				label: "Models",
+				currentValue: `${total} registered · default ${defaultLabel}`,
+				values: [`${total} registered · default ${defaultLabel}`],
+				description: "Inspect, consult, or set the default rescuer (opens the model list)",
+			},
+			{
+				id: "approval",
+				label: "Approval",
+				currentValue: approvalMode.toUpperCase(),
+				description:
+					"Gate for LLM-invoked consults: ask prompts, judge auto-approves clear consults, auto never asks. Enter opens; always-allowed models can be revoked there.",
+				submenu: (_currentValue, close) => {
+					let mode = cfg.approval?.consultTool ?? "ask";
+					const subItems: SettingItem[] = [
+						{
+							id: "mode",
+							label: "Mode",
+							currentValue: mode,
+							values: ["ask", "judge", "auto"],
+							description:
+								"ask: prompt before every LLM-invoked consult · judge: fabric auto-approves clear consults, asks when unsure · auto: never asks",
+						},
+						...autoApproved.map((n) => ({
+							id: `revoke:${n}`,
+							label: n,
+							currentValue: "always-allowed",
+							values: ["always-allowed", "prompts again"],
+							description: "Enter toggles whether this model's consults skip the approval prompt",
+						})),
+					];
+					return submenu(
+						"Consult approval",
+						subItems,
+						(id, value) => {
+							if (id === "mode") {
+								mode = value as "ask" | "judge" | "auto";
+								updateGlobalConfig((g) => {
+									g.approval = { ...(g.approval ?? {}), consultTool: mode };
+								});
+							} else {
+								const name = id.slice("revoke:".length);
+								updateGlobalConfig((g) => {
+									if (g.models?.[name]) g.models[name].autoApprove = value === "always-allowed";
+								});
+							}
+						},
+						() => close(mode.toUpperCase()),
+					);
+				},
+			},
+			{
+				id: "context",
+				label: "Context keeper",
+				currentValue: contextSummary(cfg),
+				description: `Applies to registered models classed "local" (fallback providers: ${(cfg.context?.providers ?? DEFAULT_CONTEXT_PROVIDERS).join(", ")}); others use pi built-in`,
+				submenu: (_currentValue, close) => {
+					const c = loadConfig(ctx.cwd).context ?? {};
+					const subItems: SettingItem[] = [
+						{
+							id: "mode",
+							label: "Compaction",
+							currentValue: c.mode ?? (c.checkpoint === false ? "off" : "arc"),
+							values: ["arc", "checkpoint", "off"],
+							description: "arc: deterministic digest (recall recovers exact content) · checkpoint: LLM-written · off: pi default",
+						},
+						{
+							id: "pruner",
+							label: "Pruner",
+							currentValue: onOffValue(c.pruner !== false),
+							values: ["ON", "OFF"],
+							description: "Trims oversized shell outputs at ingestion (full output stashed for recall)",
+						},
+						{
+							id: "recall",
+							label: "Recall tool",
+							currentValue: onOffValue(c.recall !== false),
+							values: ["ON", "OFF"],
+							description: "Transcript search + entry read-back",
+						},
+						{
+							id: "notes",
+							label: "Note tool",
+							currentValue: onOffValue(c.notes !== false),
+							values: ["ON", "OFF"],
+							description: "Model notes pinned verbatim into digests",
+						},
+					];
+					return submenu(
+						"Context keeper",
+						subItems,
+						(id, value) => {
+							updateGlobalConfig((g) => {
+								g.context = { ...(g.context ?? {}) };
+								if (id === "mode") {
+									g.context.mode = value as "arc" | "checkpoint" | "off";
+									delete g.context.checkpoint; // retire the legacy boolean
+								} else {
+									g.context[id as "pruner" | "recall" | "notes"] = value === "ON";
+								}
+							});
+						},
+						() => close(contextSummary(loadConfig(ctx.cwd))),
+					);
+				},
+			},
+			{
+				id: "harness",
+				label: "Model harness",
+				currentValue: harnessHubLine(ctx),
+				values: [harnessHubLine(ctx)],
+				description: "Per-model-family trained dialects and thinking controls (opens the harness registry)",
+			},
+			{
+				id: "watchdog",
+				label: "Watchdog",
+				currentValue: onOffValue(cfg.watchdog?.enabled !== false),
+				values: ["ON", "OFF"],
+				description: "Stuck/drift detection every turn (persisted; /watchdog on|off is the session-only switch)",
+			},
+			{
+				id: "judge",
+				label: "Judge (System One)",
+				currentValue: onOffValue(cfg.judge?.enabled !== false),
+				values: ["ON", "OFF"],
+				description: `${judgeStatus(cfg.judge, modelBaseUrl(ctx.model))} — the decision fabric behind watchdog, triage, gate, guards, recall, and routing (/geocine judge prints details)`,
+			},
+			{
+				id: "rescue",
+				label: "Rescue capture",
+				currentValue: onOffValue(cfg.rescue?.enabled !== false),
+				values: ["ON", "OFF"],
+				description: "Capture manual local→frontier /model switches as rescue episodes for /distill",
+			},
+			{
+				id: "data",
+				label: "Training data",
+				currentValue: "consult-log · distill · lessons",
+				values: ["consult-log · distill · lessons"],
+				description: "Consult-log stats, rescue distilling, lesson drafts (opens the data menu)",
+			},
+			{
+				id: "config",
+				label: "Config",
+				currentValue: CONFIG_FILE,
+				values: [CONFIG_FILE],
+				description: "Edit the geocine.json config in place",
+			},
+		];
+
+		const list = new SettingsList(
+			items,
+			12,
+			listTheme,
+			(id, value) => {
+				switch (id) {
+					case "models":
+					case "harness":
+					case "data":
+					case "config":
+						done(id);
+						return;
+					case "watchdog":
+						updateGlobalConfig((g) => {
+							g.watchdog = { ...(g.watchdog ?? {}), enabled: value === "ON" };
+						});
+						return;
+					case "judge":
+						updateGlobalConfig((g) => {
+							g.judge = { ...(g.judge ?? {}), enabled: value === "ON" };
+						});
+						return;
+					case "rescue":
+						updateGlobalConfig((g) => {
+							g.rescue = { ...(g.rescue ?? {}), enabled: value === "ON" };
+						});
+						return;
+					// approval/context: submenu already wrote the config; the
+					// value passed here is just the refreshed row summary.
+					case "approval":
+					case "context":
+						return;
+				}
+			},
+			() => done(null),
+		);
+		if (initial) list.selectItem(initial);
+
+		const container = new Container();
+		container.addChild(new DynamicBorder((s: string) => theme.fg("borderAccent", s)));
+		container.addChild(new Text(theme.fg("accent", theme.bold("geocine-pi"))));
+		container.addChild(list);
+		container.addChild(new DynamicBorder((s: string) => theme.fg("borderAccent", s)));
+
+		return {
+			render: (width: number) => container.render(width),
+			invalidate: () => container.invalidate(),
+			handleInput: (data: string) => {
+				list.handleInput(data);
+				tui.requestRender();
+			},
+		};
+	});
 }
 
 async function runSection(section: Section, ctx: ExtensionContext): Promise<void> {
@@ -401,70 +672,17 @@ export default function geocineMenu(pi: ExtensionAPI) {
 				await runSection(jump, ctx);
 				return;
 			}
-			// Hub loop: stay in the menu until cancel/escape. Rendered as a
-			// two-column panel (richSelect): setting name left, current state
-			// right — the hub doubles as a status readout.
+			// Hub: a persistent settings panel (see hubPanel). Toggles and
+			// submenus change in place with the cursor staying on the row;
+			// only models/harness/data/config close the panel to run their
+			// flow, and the hub reopens with the cursor back on that row.
+			let reselect: Section | undefined;
 			for (;;) {
-				const cfg = loadConfig(ctx.cwd);
-				const total = Object.keys(cfg.models).length;
-				const defaultName = defaultModelName(cfg);
-				const defaultLabel = defaultName ? modelLabel(cfg.models[defaultName]) : "none";
-				const approvalMode = cfg.approval?.consultTool ?? "ask";
-				const contextMode = cfg.context?.mode ?? (cfg.context?.checkpoint === false ? "off" : "arc");
-				const watchdogOn = cfg.watchdog?.enabled !== false;
-				const rescueOn = cfg.rescue?.enabled !== false;
-				const items: Array<SelectItem & { value: Section }> = [
-					{
-						value: "models",
-						label: "Models",
-						description: `${total} registered · judge routes per task by class · default ${defaultLabel}`,
-					},
-					{
-						value: "approval",
-						label: "Approval",
-						description:
-							approvalMode === "auto"
-								? "AUTO — LLM consults run without asking"
-								: approvalMode === "judge"
-									? "JUDGE — fabric auto-approves clear consults, asks when unsure"
-									: `ASK — prompts before LLM-invoked consults${Object.values(cfg.models).some((c) => c.autoApprove) ? " (some always-allowed)" : ""}`,
-					},
-					{
-						value: "context",
-						label: "Context keeper",
-						description: `${contextMode.toUpperCase()} · pruner ${onOff(cfg.context?.pruner !== false)} · recall ${onOff(cfg.context?.recall !== false)}${cfg.context?.compactAtTokens ? ` · compact at ${Math.round(cfg.context.compactAtTokens / 1000)}k` : ""}`,
-					},
-					{
-						value: "harness",
-						label: "Model harness",
-						description: harnessHubLine(ctx),
-					},
-					{
-						value: "watchdog",
-						label: "Watchdog",
-						description: `${onOff(watchdogOn)} — enter turns ${watchdogOn ? "OFF" : "ON"}`,
-					},
-					{
-						value: "judge",
-						label: "Judge (System One)",
-						description: judgeStatus(cfg.judge, modelBaseUrl(ctx.model)),
-					},
-					{
-						value: "rescue",
-						label: "Rescue capture",
-						description: `${onOff(rescueOn)} — enter turns ${rescueOn ? "OFF" : "ON"}`,
-					},
-					{
-						value: "data",
-						label: "Training data",
-						description: "consult-log stats · rescue distill · lesson drafts",
-					},
-					{ value: "config", label: "Config", description: `edit ${CONFIG_FILE}` },
-				];
-				const picked = (await richSelect(ctx, "geocine-pi", items)) as Section | undefined;
+				const picked = await hubPanel(ctx, reselect);
 				if (!picked) return;
 				await runSection(picked, ctx);
 				if (picked === "models" || picked === "config") return;
+				reselect = picked;
 			}
 		},
 	});
