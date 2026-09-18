@@ -29,7 +29,7 @@ import type {
 	NoulAnswer,
 	ScoreAnswer,
 } from "./types.ts";
-import { typesafeJudge } from "./typesafe.ts";
+import { typesafeApiKeyEnv, typesafeHost, typesafeJudge, typesafeModel } from "./typesafe.ts";
 
 export type {
 	ChoiceQuestion,
@@ -170,10 +170,14 @@ export function judgeStatus(cfg: JudgeSettings | undefined): string {
 	const backend = BACKENDS.find((b) => b.id === id);
 	const fb = fallbackTier(settings);
 	const fbNote = fb ? ` · fallback naive-llm @ ${fb.settings.baseUrl}` : "";
+	const keyEnv = id === "typesafe" ? typesafeApiKeyEnv(settings) : (settings.apiKeyEnv ?? "TYPESAFE_API_KEY");
 	if (!backend) return `unknown provider "${id}"${fbNote || " — heuristic fallbacks only"}`;
 	if (!backend.configured(settings)) {
-		if (fb) return `${id}: no API key (${settings.apiKeyEnv ?? "TYPESAFE_API_KEY"})${fbNote}`;
-		return `${id}: no API key (${settings.apiKeyEnv ?? "TYPESAFE_API_KEY"}) — heuristic fallbacks only`;
+		if (fb) return `${id}: no API key (${keyEnv})${fbNote}`;
+		return `${id}: no API key (${keyEnv}) — heuristic fallbacks only`;
+	}
+	if (id === "typesafe") {
+		return `${id}/${typesafeModel(settings)} @ ${typesafeHost(settings)} ready${fbNote}`;
 	}
 	return `${id}/${settings.model ?? "jev-latest"} ready${fbNote}`;
 }

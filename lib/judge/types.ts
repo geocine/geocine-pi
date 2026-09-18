@@ -94,12 +94,30 @@ export interface JudgeSettings {
 	provider?: string;
 	/** Master switch. Default: enabled when the backend is configured. */
 	enabled?: boolean;
-	/** Backend endpoint override. */
+	/**
+	 * Classifier host. Origin (path filled in from the host) or a full
+	 * evaluate URL. Default `https://api.typesafe.ai` → POST /v1/systemone.
+	 * OpenRouter: `https://openrouter.ai` → POST /api/alpha/decisions
+	 * (model `~typesafe/jev-latest`, key OPENROUTER_API_KEY). Any other
+	 * host: set this to its full evaluate URL.
+	 */
 	baseUrl?: string;
-	/** Model id/alias, backend-specific. Default per backend. */
+	/**
+	 * Model id/alias, backend-specific. Default `jev-latest` on TypeSafe,
+	 * `~typesafe/jev-latest` on OpenRouter.
+	 */
 	model?: string;
-	/** Env var holding the API key. Default per backend. */
+	/**
+	 * Env var holding the API key. Default `TYPESAFE_API_KEY`, or
+	 * `OPENROUTER_API_KEY` when `baseUrl` is an OpenRouter host.
+	 */
 	apiKeyEnv?: string;
+	/**
+	 * Max tokens of serialized state+questions sent to Jev. Jev's input
+	 * window is 32k (OpenRouter lists 32k; TypeSafe: 32k for state + the
+	 * longest question). Oversized state is clipped. Default 32000.
+	 */
+	maxInputTokens?: number;
 	/** Per-call budget before falling back. Default 4000. */
 	timeoutMs?: number;
 	/**
