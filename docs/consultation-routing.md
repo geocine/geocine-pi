@@ -174,19 +174,21 @@ entries age out. `/models` shows each consultant's remembered outcomes —
 and marks the ones still unexplored ("none yet — eligible for low-stakes
 exploration").
 
-Outcome-learned routing has a known blind spot: a model that never gets
-picked never builds history, so the router can never learn it. The
-`unexplored` list closes it with targeted exploration — on a low-stakes
-task where an unexplored model fits just as well, the judge is told to
-give it the consult so its history can start forming. High-stakes and
-refusal-sensitive work never explores.
+Learning from outcomes has a blind spot: a model you never pick never
+builds history, so the router can never learn it. The `unexplored` list
+closes it. **On a low-stakes task where an unexplored model fits the role
+equally well, the judge hands it the consult so its history can start
+forming.** High-stakes and refusal-sensitive work never explores.
 
-The memory itself has two layers. The long-term baseline is the portable
-calibration snapshot (`~/.pi/agent/calibration.json`) — old log records
-fold into it as bounded counters behind a timestamp watermark. The live
-layer is whatever the recent logs hold past that watermark. Copy the
-snapshot to a new workstation and routing remembers you there;
-`/calibration reset` forgets and relearns from today.
+Where does all this memory live? Two layers. The long-term baseline is
+the portable calibration snapshot (`~/.pi/agent/calibration.json`): old
+log records fold into it as bounded counters behind a timestamp
+watermark. The live layer is whatever the recent logs hold past that
+watermark.
+
+**Copy that one snapshot file to a new workstation and routing remembers
+you there.** Want a clean slate instead? `/calibration reset` forgets
+everything and relearns from today.
 
 Same data, three horizons: this in-context loop makes today's routing
 reflect past outcomes, the snapshot keeps that memory compact and
