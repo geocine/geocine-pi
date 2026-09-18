@@ -1,8 +1,9 @@
-// web_fetch / web_search: canonical web tools. Both qwen-code and grok-build
-// train their models on these (qwen web_fetch takes url+prompt, grok's takes
-// url only; both take a query for web_search, grok adds allowed_domains).
-// Codex models get web access as a hosted provider tool, so these are hidden
-// from OpenAI models via ownedTools.
+// web_fetch / web_search: canonical web tools. qwen-code, grok-build, and
+// dsh all train their models on these (qwen web_fetch takes url+prompt, grok
+// and dsh take url only; qwen/grok take a query for web_search, grok adds
+// allowed_domains, dsh takes a queries array). Codex models get web access
+// as a hosted provider tool, so these are hidden from OpenAI models via
+// ownedTools.
 //
 // The tool schemas here are the trained dialects and never change. What
 // serves them is a pluggable provider (lib/web-providers/): "tinyfish"

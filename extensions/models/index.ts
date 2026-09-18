@@ -11,6 +11,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { loadConfig } from "../../lib/config.ts";
 import { richSelect, type SelectItem } from "../../lib/rich-select.ts";
 import { applyAliasesToPayload, removeToolsFromPayload, restoreCanonicalToolCalls } from "./aliases.ts";
+import { deepseekHarness } from "./deepseek.ts";
 import { grokHarness } from "./grok.ts";
 import { openaiHarness } from "./openai.ts";
 import { qwenHarness } from "./qwen.ts";
@@ -18,7 +19,7 @@ import { registerTodoTool, rehydrateTodos } from "./todo.ts";
 import type { ModelHarness } from "./types.ts";
 import { registerWebTools } from "./web.ts";
 
-const HARNESSES: ModelHarness[] = [qwenHarness, grokHarness, openaiHarness];
+const HARNESSES: ModelHarness[] = [qwenHarness, grokHarness, openaiHarness, deepseekHarness];
 
 const STATUS_ID = "model-harness";
 
@@ -92,8 +93,9 @@ export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 		harness.registerTools?.(pi);
 	}
 	// Shared trained-tool equivalents: every scaffold has a plan tool, and
-	// qwen-code + grok-build train client web tools (codex's are hosted, so
-	// web tools are in qwen/grok ownedTools and hidden from OpenAI models).
+	// qwen-code, grok-build + dsh train client web tools (codex's are hosted,
+	// so web tools are in qwen/grok/deepseek ownedTools and hidden from
+	// OpenAI models).
 	registerTodoTool(pi);
 	registerWebTools(pi);
 

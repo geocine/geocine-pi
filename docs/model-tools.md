@@ -37,9 +37,12 @@ prefix for cosmetic reasons.
 | Qwen | `read_file`, `write_file`, `run_shell_command`, `grep_search`, `glob`, `list_directory`, `todo_write` | `read`, `write`, `bash`, `grep`, `find`, `ls`, `todo` |
 | Grok | `run_terminal_command`, `read_file`, `search_replace`, `list_dir`, `todo_write` | `bash`, `read`, `edit`, `ls`, `todo` |
 | OpenAI | `exec_command`, `apply_patch`, `update_plan`, `view_image` | canonical shell, patch, todo, and image handling |
+| DeepSeek | `bash` (`timeoutMs`, `workdir`), `read`/`write`/`edit` on `file_path`, `glob`, `grep` (`include`), `todo_write`, `ask_user_question`, `web_search` (`queries[]`) | `bash`, `read`, `write`, `edit`, `find`, `grep`, `todo`, `ask_user`, `web_search` |
 
 Qwen also repairs leaked XML calls and llama.cpp schema quirks. OpenAI
-gets native multi-file `apply_patch`.
+gets native multi-file `apply_patch`. DeepSeek's dialect comes from its
+first-party harness (`dsh`): mostly canonical names with trained
+parameter spellings.
 
 The shared todo state survives model changes and compaction.
 
