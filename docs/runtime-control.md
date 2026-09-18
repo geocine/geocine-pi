@@ -174,6 +174,21 @@ low-confidence ones, the confidence is noise** — raise
 `judge.minConfidence` or stop trusting auto-approval. If they do, the
 thresholds can come down and the fabric earns more autonomy.
 
+### Where does the learning live?
+
+In one portable file: `~/.pi/agent/calibration.json`. Raw logs grow by
+the month; the snapshot doesn't. Old records get **folded** into it —
+pure counters plus a handful of capped examples — behind a timestamp
+watermark, so nothing is counted twice. It folds itself about weekly;
+`/calibration fold` does it on demand.
+
+**Moving workstations? Copy that one file.** Routing memory and the
+calibration report carry over; the logs can stay behind.
+
+**Want a fresh start? `/calibration reset`.** The snapshot clears and
+the watermark moves to now — learning restarts from today, and the raw
+logs stay untouched as evidence.
+
 ---
 
 ## How do you tune the three layers?

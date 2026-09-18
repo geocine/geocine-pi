@@ -171,9 +171,17 @@ aggregated by stable `provider/model` identity (registry keys are just
 labels and get renamed), so history survives config renames and stale
 entries age out. `/models` shows each consultant's remembered outcomes.
 
-Same data, two horizons: this in-context loop makes today's routing
-reflect last week's outcomes; the judge trace (`judge-YYYY-MM.jsonl`)
-remains the offline dataset for eventually training your own routing head.
+The memory itself has two layers. The long-term baseline is the portable
+calibration snapshot (`~/.pi/agent/calibration.json`) — old log records
+fold into it as bounded counters behind a timestamp watermark. The live
+layer is whatever the recent logs hold past that watermark. Copy the
+snapshot to a new workstation and routing remembers you there;
+`/calibration reset` forgets and relearns from today.
+
+Same data, three horizons: this in-context loop makes today's routing
+reflect past outcomes, the snapshot keeps that memory compact and
+portable, and the judge trace (`judge-YYYY-MM.jsonl`) remains the offline
+dataset for eventually training your own routing head.
 
 ---
 

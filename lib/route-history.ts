@@ -16,46 +16,33 @@
 // either identity resolves to the CURRENT registry entry, so history
 // survives a rename and stale keys age out naturally.
 //
-// Same data, two horizons: this is the short-term loop (today's sessions
-// see last week's outcomes); the judge trace remains the long-term one
-// (training rows for an offline routing head).
+// Memory has two layers: the portable calibration snapshot
+// (calibration-snapshot.ts) is the long-term baseline — everything folded
+// behind its watermark — and the recent months of the raw log supply what
+// happened since. Reading = snapshot + records newer than the watermark,
+// so folding never double-counts. The judge trace remains the offline
+// horizon (training rows for a routing head).
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+	loadSnapshot,
+	MAX_EXEMPLARS,
+	type ModelOutcomes,
+	type UserChoiceExemplar,
+	type WorkerOutcomes,
+} from "./calibration-snapshot.ts";
 import { logDir, modelLabel, type GeocineConfig, type ModelConfig } from "./config.ts";
 
-/** Months of consult-log history scanned (current + previous N-1). */
+export type { ModelOutcomes, UserChoiceExemplar, WorkerOutcomes };
+
+/** Months of consult-log history scanned for the live layer. */
 const HISTORY_MONTHS = 3;
 /** Reparse the log files at most this often. */
 const CACHE_TTL_MS = 60_000;
-/** Exemplars kept (the judge sees the newest ones). */
-const MAX_EXEMPLARS = 10;
 const MAX_TASK_CHARS = 160;
 
-interface WorkerOutcomes {
-	consults: number;
-	refused: number;
-	overriddenAway: number;
-	overriddenTo: number;
-	denied: number;
-}
-
-export interface ModelOutcomes extends WorkerOutcomes {
-	/** The same counts split by the worker (`mainModel`) active at the time. */
-	perWorker: Record<string, WorkerOutcomes>;
-}
-
-export interface UserChoiceExemplar {
-	task: string;
-	proposed: string;
-	action: "override" | "denied";
-	/** Who the user picked instead (override only). */
-	chose?: string;
-	/** Worker active when the choice was made. */
-	worker?: string;
-}
-
-interface HistoryAggregate {
+export interface HistoryAggregate {
 	/** Keyed by stable identity (provider/model) or legacy registry key. */
 	models: Record<string, ModelOutcomes>;
 	exemplars: UserChoiceExemplar[];
@@ -103,6 +90,7 @@ function perWorker(m: ModelOutcomes, worker: string | undefined): WorkerOutcomes
 
 interface LoggedRecord {
 	type?: string;
+	ts?: string;
 	consultant?: string;
 	consultantModel?: string;
 	proposedConsultant?: string;
@@ -114,7 +102,13 @@ interface LoggedRecord {
 	mainModel?: string;
 }
 
-function aggregate(dir: string): HistoryAggregate {
+/**
+ * Aggregate routing outcomes from log records inside a ts window
+ * (afterTs, beforeTs]. ISO timestamps compare lexicographically; "" means
+ * unbounded. The fold in calibration.ts uses the same window semantics,
+ * which is what makes snapshot + live additive instead of overlapping.
+ */
+export function aggregateRoutingWindow(dir: string, afterTs: string, beforeTs = ""): HistoryAggregate {
 	const models: Record<string, ModelOutcomes> = {};
 	const exemplars: UserChoiceExemplar[] = [];
 	for (const file of monthFiles(dir)) {
@@ -132,6 +126,9 @@ function aggregate(dir: string): HistoryAggregate {
 			} catch {
 				continue;
 			}
+			const ts = rec.ts ?? "";
+			if (afterTs && ts <= afterTs) continue;
+			if (beforeTs && ts > beforeTs) continue;
 			const key = rec.consultantModel ?? rec.consultant;
 			if (!key) continue;
 			if (rec.type === "consult_result") {
@@ -179,22 +176,42 @@ function aggregate(dir: string): HistoryAggregate {
 	return { models, exemplars: exemplars.slice(-MAX_EXEMPLARS) };
 }
 
+/**
+ * Long-term snapshot baseline + live records newer than its watermark.
+ * The two layers are disjoint by construction (the fold moves records
+ * behind the watermark), so merging them is pure addition.
+ */
 function loadAggregate(cfg: GeocineConfig): HistoryAggregate {
 	const dir = logDir(cfg);
 	const hit = cache.get(dir);
 	if (hit && Date.now() - hit.ts < CACHE_TTL_MS) return hit.aggregate;
-	const fresh = aggregate(dir);
-	cache.set(dir, { ts: Date.now(), aggregate: fresh });
-	return fresh;
+	const snap = loadSnapshot(dir);
+	const live = aggregateRoutingWindow(dir, snap.foldedThrough);
+	const models: Record<string, ModelOutcomes> = {};
+	for (const layer of [snap.routing.models, live.models]) {
+		for (const [key, m] of Object.entries(layer)) addInto(outcomes(models, key), m);
+	}
+	const merged: HistoryAggregate = {
+		models,
+		exemplars: [...snap.routing.exemplars, ...live.exemplars].slice(-MAX_EXEMPLARS),
+	};
+	cache.set(dir, { ts: Date.now(), aggregate: merged });
+	return merged;
 }
 
-function addInto(target: ModelOutcomes, source: ModelOutcomes): void {
+/** Drop the cached aggregate for one log dir (the fold just moved the watermark). */
+export function clearRouteHistoryCache(dir: string): void {
+	cache.delete(dir);
+}
+
+export function addInto(target: ModelOutcomes, source: ModelOutcomes): void {
 	target.consults += source.consults;
 	target.refused += source.refused;
 	target.overriddenAway += source.overriddenAway;
 	target.overriddenTo += source.overriddenTo;
 	target.denied += source.denied;
-	for (const [worker, w] of Object.entries(source.perWorker)) {
+	// snapshot entries travel between machines as plain JSON; tolerate a missing split
+	for (const [worker, w] of Object.entries(source.perWorker ?? {})) {
 		const t = perWorker(target, worker);
 		t.consults += w.consults;
 		t.refused += w.refused;
