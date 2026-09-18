@@ -97,7 +97,7 @@ flowchart LR
   "questions": {
     "rescuer": {
       "type": "choice",
-      "instructions": "Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Match capability tags to the question — e.g. a question about an image or screenshot needs a vision-classed model. Avoid strict-guardrail models when the content looks likely to trigger a refusal — NSFW/adult/sexual content (including image captions), or blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Ordinary reverse engineering (decompile/disassemble to understand a binary, defensive analysis) stays on aligned models. Prefer an abliterated-class one only for the refusal cases; among those, prefer one also classed local over a hosted abliterated fallback. Weigh `history` when present — it is how past consults from this user actually went: prefer models the user picked over a proposal for similar tasks (`overridden_to`, `recent_user_choices`), avoid ones that refused, were overridden away, or were denied for similar work; counts under `same_worker` happened with the same `worker` model active as now and weigh more than the overall counts. When several fit equally, prefer the lower `rank` (1 = first choice).",
+      "instructions": "Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Match capability tags to the question — e.g. a question about an image or screenshot needs a vision-classed model. Avoid strict-guardrail models when the content looks likely to trigger a refusal — NSFW/adult/sexual content (including image captions), or blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Ordinary reverse engineering (decompile/disassemble to understand a binary, defensive analysis) stays on aligned models. Prefer an abliterated-class one only for the refusal cases; among those, prefer one also classed local over a hosted abliterated fallback. Weigh `history` when present — it is how past consults from this user actually went: prefer models the user picked over a proposal for similar tasks (`overridden_to`, `recent_user_choices`), avoid ones that refused, were overridden away, or were denied for similar work; counts under `same_worker` happened with the same `worker` model active as now and weigh more than the overall counts. `history.unexplored` lists models with no recorded outcomes yet: when the task is low-stakes (a quick review, summary, or second opinion — not critical debugging, not refusal-sensitive content) and an unexplored model's role and classes fit just as well, prefer it over an equally-fitting known model so its history can form; never pick an unexplored model when the stakes or a capability mismatch argue otherwise. When several fit equally, prefer the lower `rank` (1 = first choice).",
       "criteria": {
         "qwen-27b": "local coding and research",
         "grok-4.6": "hard debugging and planning"
@@ -156,6 +156,7 @@ route node receives it as a `history` state field:
       "same_worker": { "consults": 8, "refused": 1, "overridden_away": 2, "overridden_to": 0, "denied": 0 }
     }
   },
+  "unexplored": ["deepseek-flash"],           // configured, never consulted
   "recent_user_choices": [
     { "task": "summarize this pdf structure", "proposed": "xai/grok-4.6",
       "action": "override", "chose": "meta/muse-spark-1.3-contributor",
@@ -170,6 +171,13 @@ as now, and the instruction tells the judge those weigh more. Records are
 aggregated by stable `provider/model` identity (registry keys are just
 labels and get renamed), so history survives config renames and stale
 entries age out. `/models` shows each consultant's remembered outcomes.
+
+Outcome-learned routing has a known blind spot: a model that never gets
+picked never builds history, so the router can never learn it. The
+`unexplored` list closes it with targeted exploration — on a low-stakes
+task where an unexplored model fits just as well, the judge is told to
+give it the consult so its history can start forming. High-stakes and
+refusal-sensitive work never explores.
 
 The memory itself has two layers. The long-term baseline is the portable
 calibration snapshot (`~/.pi/agent/calibration.json`) — old log records

@@ -248,6 +248,12 @@ function projectToPool(agg: HistoryAggregate, pool: Record<string, ModelConfig>)
  * newest user-choice exemplars. Only models present in `pool` appear (the
  * judge routes among those); undefined when the log holds nothing yet, so
  * an empty history adds no state noise.
+ *
+ * `unexplored` names pool models with zero recorded outcomes. Without it
+ * a never-picked model never builds history and the judge can never learn
+ * it — the classic exploration gap in outcome-learned routing. The judge
+ * instruction turns it into targeted exploration: try one on low-stakes
+ * fitting tasks so its history can form.
  */
 export function routeHistoryState(
 	cfg: GeocineConfig,
@@ -255,8 +261,9 @@ export function routeHistoryState(
 	worker: string | undefined,
 ): Record<string, unknown> | undefined {
 	const agg = loadAggregate(cfg);
+	const projected = projectToPool(agg, pool);
 	const models: Record<string, unknown> = {};
-	for (const [name, m] of Object.entries(projectToPool(agg, pool))) {
+	for (const [name, m] of Object.entries(projected)) {
 		const same = worker ? m.perWorker[worker] : undefined;
 		models[name] = {
 			consults: m.consults,
@@ -278,17 +285,21 @@ export function routeHistoryState(
 		};
 	}
 	if (Object.keys(models).length === 0 && agg.exemplars.length === 0) return undefined;
+	const unexplored = Object.keys(pool).filter((name) => !projected[name]);
 	return {
 		worker: worker ?? "(unknown)",
 		models,
+		...(unexplored.length ? { unexplored } : {}),
 		recent_user_choices: agg.exemplars,
 	};
 }
 
 /** One-line outcome summary for /models (what the router sees), or undefined. */
 export function historySummary(cfg: GeocineConfig, name: string): string | undefined {
-	const m = projectToPool(loadAggregate(cfg), cfg.models)[name];
-	if (!m) return undefined;
+	const projected = projectToPool(loadAggregate(cfg), cfg.models);
+	const m = projected[name];
+	// Unexplored only means something once other models HAVE history.
+	if (!m) return Object.keys(projected).length ? "none yet — eligible for low-stakes exploration" : undefined;
 	const parts = [
 		m.consults ? `${m.consults} consult${m.consults === 1 ? "" : "s"}` : "",
 		m.refused ? `${m.refused} refused` : "",
