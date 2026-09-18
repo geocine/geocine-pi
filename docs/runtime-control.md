@@ -114,15 +114,25 @@ sequenceDiagram
 The gate reads evidence the worker already produced. It doesn't run tests
 or builds.
 
-The verdict is anchored on your starting intent. A `wants_changes` check
-reads the task as you wrote it: "what do you think about X" is complete
-when the answer is delivered, and an empty diff is expected — the gate
-never auto-nudges an informational task into making changes. Nudges and
-hints injected by extensions never re-anchor the task or reset the nudge
-budget, so `maxNudgesPerTask` is a real cap.
-
 Its parallel checks look for regressions, scope creep, architecture
 changes, missing tests, and decisions that belong to you.
+
+---
+
+## What if you only asked a question?
+
+Ask "what do you think about my repo?" and there's nothing to diff. An
+earlier gate read that empty diff as unfinished work and nudged the
+worker to continue — so it invented changes nobody asked for.
+
+The gate now anchors on your starting intent. A `wants_changes` check
+reads the task as you wrote it, and the worker's final answer counts as
+evidence. **An informational ask is done when the answer lands — the
+gate never auto-nudges it into making changes.**
+
+One more trap is closed: a nudge arrives looking like a user message.
+Nudges and hints from extensions no longer re-anchor the task or refill
+the nudge budget. **`maxNudgesPerTask` is a real cap, not a suggestion.**
 
 ---
 
