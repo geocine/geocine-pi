@@ -54,8 +54,15 @@ export interface ModelConfig {
 	 *    jail sentry (out-of-root reads blocked and audited). Default.
 	 *  - "none": model runs in the live cwd with read-only tools
 	 *    (for free/local/lenient models where token waste costs nothing).
+	 *  - "auto": resolved per consult. The boundary exists for one flow —
+	 *    abliterated-lease work consulting an aligned model — so a
+	 *    refusal-sensitive session stages deterministically, an
+	 *    abliterated-class target runs live, and everything else asks the
+	 *    fabric's jail node: confidently-bland content (calibrated tier
+	 *    only) runs live, anything doubtful stages. Fails closed to
+	 *    "staged" without a judge.
 	 */
-	jail?: "staged" | "none";
+	jail?: "staged" | "none" | "auto";
 	/** Run the local guardrail pre-screen before consulting. Default false. */
 	prescreen?: boolean;
 	/** Extra notes injected into the briefing (e.g. persona/emphasis). */

@@ -3,7 +3,8 @@
 Read-only isn't the same as bounded. A model that can read your whole
 repo can still consume context and see files you never meant to send.
 
-**`staged` exposes the files you named. `none` exposes the live workspace.**
+**`staged` exposes the files you named. `none` exposes the live workspace.
+`auto` picks one per consult.**
 
 ## Where does the child run?
 
@@ -71,6 +72,35 @@ doesn't prevent broad reads.
 
 Use live mode only when that wider boundary is deliberate. It also skips
 pre-screening because there is no staged payload.
+
+---
+
+## When should you use `auto`?
+
+The boundary exists for one flow: policy-sensitive work on an abliterated
+lease consulting an *aligned* model. Staging lets that consultant take the
+chosen excerpts and advise without seeing — or refusing over — the rest.
+Ordinary coding consults gain nothing from the copy step; they just lose
+the live workspace.
+
+`jail: "auto"` encodes exactly that, resolved per consult:
+
+1. **Refusal-sensitive session** (an active abliterated lease, or the last
+   task scored refusal-high) → `staged`, deterministically. No judge call —
+   triage already knows.
+2. **Abliterated-class target** → `none`. It is the model such work is
+   for; there is nothing to shield it from.
+3. **Everything else** → the fabric's `jail` node scores the question and
+   file names for sensitive content. Confidently bland → `none` (the live
+   workspace is more useful to the consultant). Sensitive, unsure, an
+   uncalibrated answer, or no judge at all → `staged`.
+
+The judge can only ever *loosen* the boundary, never hold it: every
+uncertain path fails closed to `staged`, and the naive-llm fallback tier is
+never allowed to loosen (calibrated answers only — the same containment
+rule the context keeper applies to memory injections and digest drops).
+The decision and its provenance (`jailBy`, `jailSensitiveP`) land on the
+`consult_request` record.
 
 ---
 

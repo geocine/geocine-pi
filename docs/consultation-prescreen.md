@@ -140,10 +140,10 @@ families.
 All three conditions must hold:
 
 1. the model has `prescreen: true`;
-2. its jail is `staged`;
+2. its *effective* jail is `staged` (`auto` counts when it resolves there);
 3. at least one file reached staging.
 
-A question-only consult and `jail: "none"` skip the pre-screen.
+A question-only consult and a live (`none`) run skip the pre-screen.
 
 ---
 

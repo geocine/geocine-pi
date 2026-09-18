@@ -45,6 +45,7 @@ import {
 import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, type JudgeQuestion, modelBaseUrl, noulOf, scoreOf } from "../lib/judge/index.ts";
 import { looksLikeRefusal, runPi, type PiProgress, type PiRunResult } from "../lib/pi-exec.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
+import { taskIsRefusalSensitive } from "./triage.ts";
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 const MAX_STAGED_FILE_BYTES = 256 * 1024;
@@ -611,6 +612,76 @@ async function gateConsult(
 	return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
 }
 
+// ---------- jail resolution ----------
+
+/** Max sensitive-content probability at which "auto" loosens to a live run. */
+const JAIL_BLAND_MAX_P = 0.15;
+
+interface JailDecision {
+	jail: "staged" | "none";
+	by: NonNullable<ConsultRequestRecord["jailBy"]>;
+	sensitiveP?: number;
+}
+
+/**
+ * Effective jail for one consult. Static "staged"/"none" stand as written
+ * (absent = "staged"). "auto" resolves per consult, and the judge may only
+ * ever LOOSEN the boundary — every uncertain path lands on "staged":
+ *  1. a refusal-sensitive session (active abliterated lease or a
+ *     refusal-high task) stages deterministically — an aligned consultant
+ *     must not see the live workspace of policy-sensitive work;
+ *  2. an abliterated-class target is the model such work is FOR — it runs
+ *     live, same as a static "none";
+ *  3. everything else asks the fabric's jail node whether the consult
+ *     carries content that should only leave in bounded excerpts;
+ *     confidently bland (calibrated tier only — the naive-llm fallback may
+ *     never loosen a boundary) runs live, anything else stages.
+ */
+async function resolveJail(
+	cfg: GeocineConfig,
+	model: ModelConfig,
+	question: string,
+	files: string[],
+	workerBaseUrl: string | undefined,
+	signal: AbortSignal | undefined,
+): Promise<JailDecision> {
+	const configured = model.jail ?? "staged";
+	if (configured !== "auto") return { jail: configured, by: "static" };
+	if (taskIsRefusalSensitive()) return { jail: "staged", by: "lease" };
+	if (model.classes?.includes("abliterated")) return { jail: "none", by: "abliterated_target" };
+	const result = await judge(
+		cfg.judge,
+		{
+			state: {
+				question: question.slice(0, 1200),
+				files,
+				consultant: {
+					model: modelLabel(model),
+					role: model.role ?? "general consultant",
+					classes: model.classes ?? [],
+				},
+			},
+			questions: {
+				sensitive: {
+					type: "noul",
+					instructions:
+						"The local worker wants to consult `consultant`, a strict aligned cloud model. Decide the isolation boundary: must the consultant see ONLY explicitly staged excerpts (true), or is it safe to run it in the live workspace (false)? True when `question` or `files` suggest policy-sensitive, adult/NSFW, offensive-security, secret-bearing, or otherwise refusal-prone or private content. False when this is clearly ordinary software work — coding, debugging, planning, research.",
+					criteria: {
+						true: "Sensitive or doubtful — expose only the staged excerpts",
+						false: "Clearly ordinary software work — the live workspace is safe to read",
+					},
+				},
+			},
+		},
+		{ node: "jail", timeoutMs: 2500, workerBaseUrl, signal },
+	);
+	const p = noulOf(result, "sensitive");
+	if (result?.calibrated && p !== undefined && p <= JAIL_BLAND_MAX_P) {
+		return { jail: "none", by: "judge", sensitiveP: p };
+	}
+	return { jail: "staged", by: p === undefined ? "failsafe" : "judge", sensitiveP: p };
+}
+
 // ---------- consultation ----------
 
 interface ConsultOutcome {
@@ -640,7 +711,11 @@ async function consult(
 	const dir = logDir(cfg);
 	const cwd = ctx.cwd;
 	const base = { cid, cwd, mainModel: mainModelId(ctx) };
-	const jail = model.jail ?? "staged";
+	const decision = await resolveJail(cfg, model, question, fileSpecs, modelBaseUrl(ctx.model), signal);
+	const jail = decision.jail;
+	if ((model.jail ?? "staged") === "auto" && decision.by !== "abliterated_target") {
+		notify(`consult: jail auto → ${jail} (${decision.by}${decision.sensitiveP !== undefined ? ` p=${decision.sensitiveP.toFixed(2)}` : ""})`);
+	}
 
 	appendRecord(dir, {
 		type: "consult_request",
@@ -656,6 +731,9 @@ async function consult(
 		approveP: routing?.approveP,
 		chosenBy: routing?.chosenBy,
 		offlineExcluded: routing?.offline?.size ? Object.fromEntries(routing.offline) : undefined,
+		jail,
+		jailBy: decision.by,
+		jailSensitiveP: decision.sensitiveP,
 	});
 
 	// 1. Stage (context firewall) unless running in place.

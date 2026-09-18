@@ -11,7 +11,7 @@
 			"role": "hard debugging, root-cause analysis, and planning complex changes",
 			"classes": ["frontier", "intelligent"],
 			"rank": 1,
-			"jail": "staged",
+			"jail": "auto",
 			"prescreen": true
 		},
 		"gpt-5.6-luna": {
@@ -21,7 +21,7 @@
 			"role": "maximum-depth reasoning: subtle correctness bugs, algorithm design, and second opinions on frontier-level plans",
 			"classes": ["frontier", "cheap", "intelligent"],
 			"rank": 2,
-			"jail": "staged",
+			"jail": "auto",
 			"prescreen": true
 		},
 		"qwen-27b": {
@@ -59,7 +59,7 @@
 			"role": "super-fast cheap consult for quick answers, long-context work, and native image questions",
 			"classes": ["cheap", "fast", "intelligent", "vision"],
 			"rank": 2,
-			"jail": "staged",
+			"jail": "auto",
 			"prescreen": true
 		},
 		"muse-spark-1.3-contributor": {
@@ -69,9 +69,9 @@
 			"role": "discounted frontier-quality generalist for coding, 1M-token long-context work, and image questions",
 			"classes": ["cheap", "fast", "intelligent", "vision"],
 			"rank": 1,
-			"jail": "staged",
+			"jail": "auto",
 			"prescreen": true,
-			"notes": "Contributor tier of Muse Spark 1.3 ($0.10/$0.20 per Mtok); thinking capped at xhigh. Aligned consult target: staged so abliterated-lease work only exposes chosen excerpts, prescreened for refusal risk."
+			"notes": "Contributor tier of Muse Spark 1.3 ($0.10/$0.20 per Mtok); thinking capped at xhigh. Aligned consult target: jail auto stages abliterated-lease work (prescreened), confidently bland consults run live."
 		}
 	},
 

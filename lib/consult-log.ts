@@ -66,6 +66,18 @@ export interface ConsultRequestRecord extends BaseRecord {
 	offlineExcluded?: Record<string, string>;
 	/** Session mode active when the consult was requested (routing feature). */
 	mode?: string;
+	/** Effective jail for this consult (config "auto" resolves per consult). */
+	jail?: "staged" | "none";
+	/**
+	 * Who resolved the jail: "static" = configured value stood;
+	 * "lease" = refusal-sensitive session state forced staged;
+	 * "abliterated_target" = permissive target runs live;
+	 * "judge" = the fabric's jail node decided; "failsafe" = no judge
+	 * answer, staged.
+	 */
+	jailBy?: "static" | "lease" | "abliterated_target" | "judge" | "failsafe";
+	/** Jail node's sensitive-content probability, when it was consulted. */
+	jailSensitiveP?: number;
 }
 
 export interface StagedFile {

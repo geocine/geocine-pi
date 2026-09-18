@@ -48,7 +48,7 @@ win, and most settings reload on each event.
 | `classes` | `[]` | Capabilities and routing handles |
 | `rank` | unranked | Lower wins inside one class |
 | `thinking` | provider default | Child-run thinking level |
-| `jail` | `staged` | Staged context firewall or live `none` |
+| `jail` | `staged` | Staged context firewall, live `none`, or per-consult `auto` |
 | `prescreen` | `false` | Screens staged content before a strict consult |
 | `autoApprove` | `false` | Skips approval for this model |
 | `notes` | none | Extra bounded briefing text |
