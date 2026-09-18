@@ -17,10 +17,19 @@
 // agent already produced — the gate never runs a test suite itself.
 //
 // One call, many parallel questions (System One answers them together):
-// done, next (continue/stop/escalate), revert, plus review flags —
-// regression_risk, scope_creep, architectural_change, needs_more_tests —
-// and needs_human, a safety override that suppresses nudges whenever a
-// human decision point blocks, whatever the router said.
+// wants_changes (intent anchor), done, next (continue/stop/escalate),
+// revert, plus review flags — regression_risk, scope_creep,
+// architectural_change, needs_more_tests — and needs_human, a safety
+// override that suppresses nudges whenever a human decision point
+// blocks, whatever the router said.
+//
+// The verdict is anchored on the STARTING intent: `task` is the last
+// real user message (extension-injected nudges never re-anchor it), and
+// wants_changes decides whether a missing diff is evidence of anything.
+// Informational asks ("what do you think", "check what X provides") are
+// complete when the answer is delivered — the gate never auto-runs on
+// them, because a continue nudge would make the worker manufacture
+// changes nobody asked for.
 //
 // Actions are conservative: "stop" and review flags only set a status
 // line ("looks done — regression risk 0.8"). "continue"/"escalate" send
@@ -76,6 +85,7 @@ async function git(cwd: string, args: string[], cap: number): Promise<string> {
 
 export default function outcomeGate(pi: ExtensionAPI) {
 	let lastUserMessage = "";
+	let lastAnswer = "";
 	let turnsSinceInput = 0;
 	let toolEventsSinceInput = 0;
 	let lastGatedEvents = -1;
@@ -85,6 +95,7 @@ export default function outcomeGate(pi: ExtensionAPI) {
 
 	pi.on("session_start", async () => {
 		lastUserMessage = "";
+		lastAnswer = "";
 		turnsSinceInput = 0;
 		toolEventsSinceInput = 0;
 		lastGatedEvents = -1;
@@ -93,9 +104,23 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		ring = [];
 	});
 
+	// For informational tasks the answer IS the work product; without it the
+	// gate cannot tell an answered question from an abandoned coding task.
+	pi.on("message_end", async (event) => {
+		const message = event.message as { role?: string; content?: unknown };
+		if (message.role !== "assistant") return;
+		const text = textOf(message.content);
+		if (text.trim()) lastAnswer = text;
+	});
+
 	pi.on("input", async (event, ctx) => {
 		const text = typeof (event as { text?: unknown }).text === "string" ? (event as { text: string }).text : "";
 		if (!text || text.startsWith("/")) return;
+		// Extension-injected messages (our own nudges, watchdog/triage hints)
+		// are steering, not a new task. Treating them as the task re-anchored
+		// the gate on its own nudge text and reset the nudge budget — an
+		// unbounded continue loop on informational asks.
+		if ((event as { source?: string }).source === "extension") return;
 		lastUserMessage = text;
 		turnsSinceInput = 0;
 		toolEventsSinceInput = 0;
@@ -151,6 +176,7 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		const result = await judge(cfg.judge, {
 			state: {
 				task: lastUserMessage.slice(0, 1500),
+				answer: lastAnswer ? lastAnswer.slice(-1500) : "(the agent gave no final answer)",
 				git_changes: {
 					status: status || "(clean or not a git repo)",
 					diff_stat: diffStat || "(no uncommitted diff)",
@@ -164,13 +190,22 @@ export default function outcomeGate(pi: ExtensionAPI) {
 				},
 			},
 			questions: {
+				wants_changes: {
+					type: "noul",
+					instructions:
+						"Read `task` as the user wrote it. Does it ask the agent to CHANGE something — fix, implement, add, refactor, configure? Or does it only ask to inspect, explain, review, assess, or answer? Judge the request itself, not what the agent did afterwards: an agent that made edits nobody asked for does not turn a question into a change request.",
+					criteria: {
+						true: "The task requests a modification — its outcome should be visible in the working tree",
+						false: "The task is informational — a delivered answer completes it, no diff expected",
+					},
+				},
 				done: {
 					type: "noul",
 					instructions:
-						"The coding agent just stopped and implicitly claims `task` is handled. Does the evidence (`git_changes`, `checks`, `trace`) show the task is complete and correct? A task that needed code changes but shows no diff, or failing `checks`, is not done.",
+						"The coding agent just stopped and implicitly claims `task` is handled. For an informational task, `answer` is the deliverable: a complete, on-point answer means done, and an empty diff is expected, not missing. For a change-requesting task, does the evidence (`git_changes`, `checks`, `trace`) show the change was made and verified? Only then does a missing diff or a failing check mean not done.",
 					criteria: {
-						true: "The evidence supports completion — changes exist where expected and checks that ran passed",
-						false: "The evidence contradicts completion — missing changes, failing checks, or the trace stopped mid-way",
+						true: "The deliverable exists — an on-point answer for informational tasks, or changes plus passing checks for change requests",
+						false: "The deliverable is missing — no real answer, missing changes where expected, failing checks, or a trace that stopped mid-way",
 					},
 				},
 				next: {
@@ -241,6 +276,7 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		}, { node: "gate", workerBaseUrl: modelBaseUrl(ctx.model) });
 		const next = choiceOf(result, "next");
 		if (!result || !next || !NEXT.includes(next.choice as Next)) return;
+		const wantsChangesP = noulOf(result, "wants_changes");
 		const doneP = noulOf(result, "done");
 		const revertP = noulOf(result, "revert");
 		const regressionP = noulOf(result, "regression_risk");
@@ -267,10 +303,21 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		const localWorker = isLocalWorker(ctx.model, cfg);
 		let nudged = false;
 
+		// Intent anchor: an informational task ("what do you think", "can you
+		// check what X provides") is complete when the answer is delivered.
+		// Nudging "continue" past it makes the worker manufacture changes
+		// nobody asked for, so the gate never auto-runs on such tasks.
+		const informational = wantsChangesP !== undefined && wantsChangesP < 0.5;
+
 		if (needsHumanP !== undefined && needsHumanP >= FLAG_P) {
 			// Safety override: a human decision point blocks — never nudge
 			// past it, whatever the router said.
 			ctx.ui.setStatus("gate", `gate: needs your decision (p=${needsHumanP.toFixed(2)})${flagSuffix}`);
+		} else if (informational && next.choice !== "stop") {
+			ctx.ui.setStatus(
+				"gate",
+				`gate: informational task — answer delivered, no auto-run${doneP !== undefined ? ` (done p=${doneP.toFixed(2)})` : ""}${flagSuffix}`,
+			);
 		} else if (next.choice === "stop") {
 			ctx.ui.setStatus(
 				"gate",
@@ -302,9 +349,14 @@ export default function outcomeGate(pi: ExtensionAPI) {
 				archP !== undefined && archP >= FLAG_P
 					? ` This is a structural change (${archP.toFixed(2)}), exactly what a stronger reviewer catches problems in.`
 					: "";
+			// "Re-run the failed checks" with zero failing checks invites the
+			// model to invent gaps; only ask for what the evidence shows.
+			const verify = failing.length
+				? "then re-run the failed checks to verify"
+				: "then verify the result before stopping";
 			let nudge: string | undefined;
 			if (next.choice === "continue") {
-				nudge = `[outcome-gate] The evidence says this is not finished (${evidence || "see the last checks"}).${revertAdvice}${scopeAdvice}${testsAdvice} Continue: close the remaining gap, then re-run the failed checks to verify.`;
+				nudge = `[outcome-gate] The evidence says the requested change is not finished (${evidence || "see the last checks"}).${revertAdvice}${scopeAdvice}${testsAdvice} Continue: close the remaining gap on what the user asked for — nothing beyond it — ${verify}.`;
 			} else {
 				const rescuer = resolveModel(cfg);
 				const name = "error" in rescuer ? undefined : rescuer.name;
@@ -333,6 +385,7 @@ export default function outcomeGate(pi: ExtensionAPI) {
 			cwd: ctx.cwd,
 			mainModel: (ctx.model as { id?: string } | undefined)?.id,
 			task: lastUserMessage.slice(0, 300),
+			wantsChangesP,
 			doneP,
 			revertP,
 			regressionP,

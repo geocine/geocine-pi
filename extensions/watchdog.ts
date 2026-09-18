@@ -221,6 +221,10 @@ export default function watchdog(pi: ExtensionAPI) {
 	pi.on("session_start", async () => reset());
 
 	pi.on("input", async (event) => {
+		// Extension-injected messages (gate nudges, our own hints) are not new
+		// user direction: they must not re-anchor the task or reset incident
+		// tracking, or repeat detection restarts on every nudge.
+		if ((event as { source?: string }).source === "extension") return;
 		if (typeof (event as any).text === "string" && !(event as any).text.startsWith("/")) {
 			lastUserMessage = (event as any).text;
 			// New user direction closes the current incident.

@@ -92,11 +92,13 @@ sequenceDiagram
     participant L as Log
 
     W-->>G: Agent settled
-    G->>E: Diff + checks + trace
-    G->>J: Verify work product
+    G->>E: Diff + checks + trace + final answer
+    G->>J: Task intent + verify work product
 
     alt You must decide
         J-->>P: Show status
+    else Informational task
+        J-->>P: Answer delivered — status only
     else Continue
         J-->>P: Send one bounded nudge
     else Stop
@@ -111,6 +113,13 @@ sequenceDiagram
 
 The gate reads evidence the worker already produced. It doesn't run tests
 or builds.
+
+The verdict is anchored on your starting intent. A `wants_changes` check
+reads the task as you wrote it: "what do you think about X" is complete
+when the answer is delivered, and an empty diff is expected — the gate
+never auto-nudges an informational task into making changes. Nudges and
+hints injected by extensions never re-anchor the task or reset the nudge
+budget, so `maxNudgesPerTask` is a real cap.
 
 Its parallel checks look for regressions, scope creep, architecture
 changes, missing tests, and decisions that belong to you.
@@ -162,7 +171,7 @@ Pi's native tool approval remains the final permission boundary.
 | `guard` | Command, task, risk, blocked |
 | `tool_guard` | Tool, call, trigger, waste probability, blocked |
 | `watchdog` | Digest, tier, verdict, confidence |
-| `gate` | Done probability, route, diff stat, checks, review flags |
+| `gate` | Task intent, done probability, route, diff stat, checks, review flags |
 
 Implementation: `extensions/command-guard.ts`,
 `extensions/tool-guard.ts`, `extensions/watchdog.ts`, and

@@ -157,6 +157,8 @@ export interface GateRecord extends BaseRecord {
 	type: "gate";
 	/** The user task being verified (snippet). */
 	task: string;
+	/** Probability the task requests a modification (vs informational). */
+	wantsChangesP?: number;
 	/** Judge's "complete and correct" probability from the evidence. */
 	doneP?: number;
 	/** Judge's "worse than before — revert beats forward-fixing" probability. */
