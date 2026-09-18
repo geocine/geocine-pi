@@ -170,7 +170,9 @@ The judge does the generalizing — there is no hand-written task taxonomy.
 as now, and the instruction tells the judge those weigh more. Records are
 aggregated by stable `provider/model` identity (registry keys are just
 labels and get renamed), so history survives config renames and stale
-entries age out. `/models` shows each consultant's remembered outcomes.
+entries age out. `/models` shows each consultant's remembered outcomes —
+and marks the ones still unexplored ("none yet — eligible for low-stakes
+exploration").
 
 Outcome-learned routing has a known blind spot: a model that never gets
 picked never builds history, so the router can never learn it. The
