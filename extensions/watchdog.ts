@@ -44,6 +44,7 @@ import {
 	noulOf,
 	resolveJudge,
 } from "../lib/judge/index.ts";
+import { taskIsRefusalSensitive } from "./triage.ts";
 
 interface ToolEventSummary {
 	name: string;
@@ -294,7 +295,7 @@ export default function watchdog(pi: ExtensionAPI) {
 		// one request — near-free). It is the mid-task half of triage, and
 		// like triage it only applies while the cheap local worker is
 		// active: a frontier main model gets no escalate suggestions.
-		if (cfg.triage?.enabled !== false && isLocalWorker(ctx.model, cfg)) {
+		if (cfg.triage?.enabled !== false && isLocalWorker(ctx.model, cfg) && !taskIsRefusalSensitive()) {
 			questions.escalate = {
 				type: "noul",
 				instructions:

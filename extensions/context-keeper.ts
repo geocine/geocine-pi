@@ -58,7 +58,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { type ContextConfig, DEFAULT_CONTEXT_PROVIDERS, loadConfig, logDir } from "../lib/config.ts";
+import { type ContextConfig, contextManaged, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
 import { judge, modelBaseUrl, noulOf, scoreOf } from "../lib/judge/index.ts";
 
@@ -95,12 +95,12 @@ function mainModelId(ctx: ExtensionContext): string | undefined {
 	return model ? `${model.provider}/${model.id}` : undefined;
 }
 
-/** Whether context-keeper machinery applies to the active model's provider.
- *  Models outside context.providers get pi's built-in behavior untouched. */
-function keeperApplies(ctx: ExtensionContext, cfg: ContextConfig): boolean {
-	const provider = (ctx.model as { provider?: string } | undefined)?.provider;
-	if (!provider) return false;
-	return (cfg.providers ?? DEFAULT_CONTEXT_PROVIDERS).includes(provider);
+/** Whether context-keeper machinery applies to the active model. Registry
+ *  first: a model in the `models` collection opts in via its "local" class;
+ *  unregistered models fall back to context.providers. Everything else gets
+ *  pi's built-in behavior untouched (see contextManaged in lib/config). */
+function keeperApplies(ctx: ExtensionContext): boolean {
+	return contextManaged(ctx.model, loadConfig(ctx.cwd));
 }
 
 // ---------- shared text helpers ----------
@@ -704,7 +704,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		if (!at || at <= 0 || reminderSent || cfg.notes === false) return;
 		const lead = cfg.reminderTokens ?? DEFAULTS.reminderTokens;
 		if (lead <= 0) return;
-		if (!keeperApplies(ctx, cfg)) return;
+		if (!keeperApplies(ctx)) return;
 		const usage = ctx.getContextUsage();
 		if (usage?.tokens == null || usage.tokens < at - lead) return;
 		reminderSent = true;
@@ -742,7 +742,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		if (!text || text.startsWith("/") || text.length < 24) return;
 		const full = loadConfig(ctx.cwd);
 		const cfg = full.context ?? {};
-		if (cfg.memory === false || !keeperApplies(ctx, cfg)) return;
+		if (cfg.memory === false || !keeperApplies(ctx)) return;
 		const entries = ctx.sessionManager.getEntries() as EntryLike[];
 		const compacted = entries.some(
 			(e) =>
@@ -860,7 +860,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		const full = loadConfig(ctx.cwd);
 		const at = full.context?.compactAtTokens;
 		if (!at || at <= 0 || compactPending) return;
-		if (!keeperApplies(ctx, full.context ?? {})) return;
+		if (!keeperApplies(ctx)) return;
 		const usage = ctx.getContextUsage();
 		if (usage?.tokens == null) return;
 
@@ -900,7 +900,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		if (event.toolName !== "bash" && event.toolName !== "powershell") return;
 		const cfg = ctxCfg(ctx.cwd);
 		if (cfg.pruner === false) return;
-		if (!keeperApplies(ctx, cfg)) return;
+		if (!keeperApplies(ctx)) return;
 		const content = Array.isArray(event.content) ? (event.content as TextBlock[]) : [];
 		const pruned = pruneAtIngestion(content, {
 			thresholdChars: cfg.prunerThresholdChars ?? DEFAULTS.prunerThresholdChars,
@@ -1006,7 +1006,7 @@ export default function contextKeeper(pi: ExtensionAPI) {
 		// Models outside context.providers always get pi's built-in
 		// compaction — the digest override is a local-server optimization,
 		// not a global replacement.
-		if (!keeperApplies(ctx, cfg)) return;
+		if (!keeperApplies(ctx)) return;
 		const started = Date.now();
 		const { preparation, signal, reason } = event;
 		const { messagesToSummarize, turnPrefixMessages, tokensBefore, firstKeptEntryId, previousSummary } = preparation;

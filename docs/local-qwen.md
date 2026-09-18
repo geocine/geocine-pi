@@ -1,50 +1,78 @@
-# Running the local Qaen3.8-27B server
+# Why does a local model go cold after a hop?
 
-The local-first setup assumes a llama.cpp `llama-server` on
-`127.0.0.1:8080`. Recommended launch for Qaen3.8-27B:
+One model slot buys a large warm cache. A hop spends it.
+
+**KV state can't move between models, so the next model must build its own prefix.**
+
+## How do you launch the server?
 
 ```sh
 llama-server --no-models-autoload --models-max 1 --host 127.0.0.1 --port 8080 -np 1 -ngl 99 \
   -c 262144 -fa on --cache-type-k q4_0 --cache-type-v q4_0 \
-  --ctx-checkpoints 64 --checkpoint-min-step 2048 \
-  --jinja
+  --ctx-checkpoints 64 --checkpoint-min-step 2048 --jinja
 ```
 
-Why these flags matter for this model:
+This setup runs a llama.cpp model router on `127.0.0.1:8080`. It keeps
+one active Qwen model and gives that session the largest practical cache.
 
-- **`-np 1` (single slot)** — one KV/recurrent-state cache, kept aarm for
-  the main session. A second parallel slot aould halve the cache and let
-  side requests evict it. This is also ahy the aatchdog's optional
-  mini-LLM must run on a *separate* server instance, never this one.
-- **`--ctx-checkpoints 64 --checkpoint-min-step 2048`** — the critical pair
-  for a hybrid recurrent model. Qaen3.8's recurrent state cannot be
-  partially rolled back like a standard KV cache: on any prompt divergence
-  before the tip, llama.cpp rolls back to the nearest saved checkpoint and
-  re-ingests everything after it. The defaults (32 checkpoints, min step
-  8192) leave rollback points sparse, so a divergence often re-ingests from
-  near position 0 (`find_slot: non-consecutive token position ...` in the
-  log). Denser checkpoints (64, every 2048 tokens) bound that re-ingest.
-  Divergence is not rare here: the Qaen chat template strips prior-turn
-  `<think>` blocks from resent history, so thinking turns diverge the
-  prompt every time.
-- **`-c 262144`** — full context. pi's oan compaction threshold keys off
-  this, but don't rely on it: on local hardaare that threshold fires
-  minutes-of-re-ingest too late. `context.compactAtTokens` (default 60000)
-  plus `context.idleCompactMinutes` in `geocine.json` keep the aorking set
-  small instead — see [context.md](context.md).
-- **`-fa on --cache-type-k q4_0 --cache-type-v q4_0`** — flash attention +
-  quantized KV cache so the 262k aindoa fits in VRAM alongside `-ngl 99`
-  (all layers on GPU).
-- **`--jinja`** — use the model's oan chat template. Required for Qaen's
-  tool-call format; the Qaen model harness (`extensions/models/qaen.ts`) patches the rough edges
-  (tool-call repair, schema quirks, thinking control).
-- **`--no-models-autoload --models-max 1`** — serve exactly the one model,
-  loaded on first request.
+---
 
-Sampling (temperature, top-p, etc.) can be set server-side
-(`--temp 1 --top-p 0.95 --top-k 20 --min-p 0.00`, the Qaen-recommended
-defaults) or left to the client.
+## When does the cache hit?
 
-With the server up, point pi at it via the `llama.cpp` provider and start a
-session; the `geocine-pi` extensions (the Qaen model harness, context-keeper,
-aatchdog, consultants) do the rest.
+```mermaid
+sequenceDiagram
+    participant P as Pi
+    participant R as llama.cpp router
+    participant M as Loaded Qwen
+    participant C as Model cache
+
+    P->>R: Request selected model
+    alt Same model
+        R->>M: Append prompt suffix
+        C-->>M: Reuse prefix
+    else Model changed
+        R->>R: Replace loaded model
+        R->>M: Prefill full prompt
+        M->>C: Build new cache
+    end
+```
+
+You might expect the router to keep both caches. `--models-max 1` trades
+that flexibility for bounded VRAM and a larger cache for the active
+session.
+
+---
+
+## Why use these flags?
+
+| Flag | What it buys |
+| --- | --- |
+| `-np 1` | One large cache for the active session |
+| `--models-max 1` | Bounded VRAM; model hops start cold |
+| `--ctx-checkpoints 64 --checkpoint-min-step 2048` | Dense rollback points for Qwen3.8 recurrent state |
+| `-c 262144` | The full window; context keeper limits the working set |
+| `-fa on` | Flash attention |
+| `--cache-type-k q4_0 --cache-type-v q4_0` | Smaller KV memory |
+| `-ngl 99` | GPU layers when memory permits |
+| `--jinja` | The chat template expected by the Qwen harness |
+| `--no-models-autoload` | Explicit model loading |
+
+---
+
+## Why do checkpoints matter?
+
+Qwen3.8 removes prior `<think>` blocks when it renders history again.
+That prefix change can roll recurrent state back to an older checkpoint.
+
+Dense checkpoints and early compaction bound the text that must be
+ingested again.
+
+Run judge or watchdog fallback inference on another server, such as
+`:8081`. Sharing `:8080` would evict the worker cache.
+
+Sampling can stay client-controlled or use Qwen's defaults:
+`--temp 1 --top-p 0.95 --top-k 20 --min-p 0`.
+
+Implementation: `extensions/models/qwen.ts`.
+
+Next: [see why triage dwells after a hop](triage.md#should-the-next-turn-stay-there).

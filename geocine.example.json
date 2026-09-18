@@ -2,33 +2,65 @@
 	"$comment": "Copy to ~/.pi/agent/geocine.json and edit. Project override: .pi/geocine.json (models merge by name). Selection is class-based: model map keys are just labels — the judge routes by classes, and the 'default' class marks the no-name fallback.",
 
 	"models": {
-		"$comment": "The model registry: every consultable model. Key each entry by the model it names (grok-4.6, qwen-27b), not by role — classes carry the capability semantics. classes are free-form tags (suggested: default, frontier, abliterated, cheap, fast, local, intelligent). A class works anywhere a model name does (consult tool, /consult @cheap) and the judge's route node picks the cheapest model whose classes cover the need — the standing goal is minimal LLM token spend. 'default' marks the fallback.",
+		"$comment": "The model registry: every consultable model. Key each entry by the model it names (grok-4.6, qwen-27b), not by role — classes carry the capability semantics. classes are free-form tags (suggested: default, frontier, abliterated, cheap, fast, local, intelligent; capability tags like vision belong here too — they make the capability addressable as /consult @vision and visible to the router). rank breaks ties among models sharing a class (1 = first choice; three frontier models resolve @frontier to the best-ranked, and the route node prefers the lower rank when role and classes fit equally; unranked sorts last). A class works anywhere a model name does (consult tool, /consult @cheap) and the judge's route node picks the cheapest model whose classes cover the need — the standing goal is minimal LLM token spend. 'default' marks the fallback. The classes also drive the fabric for the MAIN session: when pi's picker lands on a model registered here, 'cheap' or 'local' arms the steering machinery (triage, escalate hints, gate nudges, tool guard) and 'local' opts it into the context keeper — whatever the provider. Availability: model choices (route node, approval picker, /consult, /models) exclude llama.cpp entries whose server is down or that pi's catalogue does not know; cloud entries are assumed reachable.",
 		"grok-4.6": {
 			"$comment": "Consult children are pi processes on the host, so they inherit auth automatically: OAuth providers via pi /login (~/.pi/agent/auth.json), API-key providers via the environment.",
 			"provider": "xai",
 			"model": "grok-4.6",
 			"thinking": "high",
 			"role": "hard debugging, root-cause analysis, and planning complex changes",
-			"classes": ["frontier", "intelligent", "default"],
+			"classes": ["frontier", "intelligent"],
+			"rank": 1,
+			"jail": "staged",
+			"prescreen": true
+		},
+		"gpt-5.6-luna": {
+			"provider": "openai-codex",
+			"model": "gpt-5.6-luna",
+			"thinking": "max",
+			"role": "maximum-depth reasoning: subtle correctness bugs, algorithm design, and second opinions on frontier-level plans",
+			"classes": ["frontier", "cheap", "intelligent"],
+			"rank": 2,
 			"jail": "staged",
 			"prescreen": true
 		},
 		"qwen-27b": {
 			"provider": "llama.cpp",
 			"model": "unsloth/Qwen3.8-27B-GGUF:Q4_K_M",
-			"role": "second opinion that costs nothing; quick sanity checks and code review",
-			"classes": ["local", "cheap", "fast"],
+			"role": "local dense 27B for coding, research, long-horizon agents, and native image/video",
+			"classes": ["local", "cheap", "fast", "vision"],
+			"rank": 2,
 			"jail": "none",
 			"prescreen": false
+		},
+		"qwen-27b-uncensored": {
+			"provider": "llama.cpp",
+			"model": "dealignai/Qwen3.8-27B-UNCENSORED-GGUF:Q4_K_M",
+			"role": "local permissive 27B for policy-sensitive work and high-risk security analysis",
+			"classes": ["abliterated", "local", "cheap", "vision"],
+			"jail": "none",
+			"rank": 1,
+			"prescreen": false,
+			"notes": "Local-first permissive fallback with coding, vision, and reasoning."
 		},
 		"abliterated-model": {
 			"provider": "abliteration-ai",
 			"model": "abliterated-model",
-			"role": "content strict models falsely refuse: reverse engineering, security analysis, decompiled binaries",
+			"role": "hosted fallback for policy-sensitive work and high-risk security analysis",
 			"classes": ["abliterated", "cheap"],
 			"jail": "none",
+			"rank": 2,
 			"prescreen": false,
-			"notes": "Fallback model for content that strict cloud models falsely refuse (reverse engineering, security analysis, decompiled binaries)."
+			"notes": "Used when aligned models are likely to decline; ordinary analysis stays aligned."
+		},
+		"deepseek-flash": {
+			"provider": "deepseek",
+			"model": "deepseek-flash",
+			"role": "super-fast cheap consult for quick answers, long-context work, and native image questions",
+			"classes": ["cheap", "fast", "intelligent", "vision"],
+			"rank": 2,
+			"jail": "staged",
+			"prescreen": true
 		}
 	},
 
@@ -56,14 +88,14 @@
 	},
 
 	"triage": {
-		"$comment": "Judge-powered task routing (needs a configured judge). At task start every user message is scored: difficulty for the local model + route (local / plan-first / frontier), judged against session stage — invested tokens mean a warm cache (staying local is cheap) but also a lossy handoff. Confident non-local routes steer the model toward an early consult. Mid-task, an escalate-now probability rides the watchdog's every-turn judge call; above escalateThreshold it suggests the consult tool (even on quiet turns — grinding without errors never trips a counter). Only runs while the active model is a cheap local provider (rescue.localProviders): a frontier main model is never steered. Every verdict is a TriageRecord: task->route labels for a future local router LoRA.",
+		"$comment": "Scores task hardness, refusal risk, and route for cheap workers. Policy-sensitive work can open a local-first abliterated lease; follow-ups dwell, clear topic changes return, ambiguity dwells, and manual model selection cancels the lease. Mid-task scoring can suggest an approval-gated consult. Verdicts log hop/dwell/return labels.",
 		"enabled": true,
 		"escalateThreshold": 0.75,
 		"cooldownTurns": 8
 	},
 
 	"gate": {
-		"$comment": "Outcome gate (needs a configured judge). When the agent settles, the judge verifies the WORK PRODUCT — git diff read directly, test/lint outputs captured from what the agent already ran — and decides continue (nudge local on) / stop (done or needs you) / escalate (suggest consult). The same call also answers review flags in parallel: revert (checks regressed while diff grew), regression_risk, scope_creep, architectural_change, needs_more_tests, and needs_human — which suppresses nudges entirely at human decision points. maxNudgesPerTask caps automatic re-runs; a nudge starts a new local run, so nudges also require a cheap local main model (rescue.localProviders) — expensive models get the verdict as a status line only.",
+		"$comment": "Outcome gate (needs a configured judge). When the agent settles, the judge verifies the WORK PRODUCT — git diff read directly, test/lint outputs captured from what the agent already ran — and decides continue (nudge local on) / stop (done or needs you) / escalate (suggest consult). The same call also answers review flags in parallel: revert (checks regressed while diff grew), regression_risk, scope_creep, architectural_change, needs_more_tests, and needs_human — which suppresses nudges entirely at human decision points. maxNudgesPerTask caps automatic re-runs; a nudge starts a new local run, so nudges also require a cheap main model (registered classes cheap/local, else rescue.localProviders) — expensive models get the verdict as a status line only.",
 		"enabled": true,
 		"maxNudgesPerTask": 1,
 		"maxDiffChars": 8000
@@ -76,7 +108,7 @@
 	},
 
 	"toolGuard": {
-		"$comment": "Tool guard (needs a configured judge) — the fabric's call-level 'wasteful?' node, for CHEAP workers that are weak at tool use (rescue.localProviders — local or budget cloud; frontier workers are never guarded). A deterministic prefilter tracks exact-call repeats, identical retries after a failure, and 3+ re-reads of the same file; only suspects reach the judge, which blocks confident thrash with a corrective reason the model reads (use recall / change the approach). Repeats after a state change (an edit, a fix) are allowed. Capped per task and cooled down between blocks; no judge = allow.",
+		"$comment": "Tool guard (needs a configured judge) — the fabric's call-level 'wasteful?' node, for CHEAP workers that are weak at tool use (registered classes cheap/local, else rescue.localProviders — local or budget cloud; frontier workers are never guarded). A deterministic prefilter tracks exact-call repeats, identical retries after a failure, and 3+ re-reads of the same file; only suspects reach the judge, which blocks confident thrash with a corrective reason the model reads (use recall / change the approach). Repeats after a state change (an edit, a fix) are allowed. Capped per task and cooled down between blocks; no judge = allow.",
 		"enabled": true,
 		"blockThreshold": 0.8,
 		"maxBlocksPerTask": 3
@@ -103,7 +135,7 @@
 	},
 
 	"context": {
-		"$comment": "context-keeper. providers = which model providers get this machinery AT ALL (default llama.cpp/lmstudio/ollama); any other picker-selected model uses pi's built-in compaction untouched. mode: 'arc' = deterministic compaction digest (no model call, instant, recall recovers exact content), 'checkpoint' = LLM-written structured checkpoint, 'off' = pi default. compactAtTokens = compact EARLY while a context.providers provider is active — pi's own threshold (contextWindow - reserveTokens) is minutes of prompt re-ingest too late on a local server. idleCompactMinutes = also compact after N idle minutes past half the threshold (cost lands while nobody waits). pruner = ingestion-time head/tail trim of oversized bash/powershell outputs (cache-neutral: trimmed ONCE at capture, full output stashed for recall). recall = transcript search (exact regex primary, BM25 fallback) + full entry read-back; rerank = judge-score the fuzzy BM25 candidates and drop confidently-irrelevant ones before the model chases them (exact matches never reranked). notes = model-written facts pinned VERBATIM into every digest; reminderTokens = pre-compaction reminder lead so the model pins state before the cut (0 = off).",
+		"$comment": "context-keeper. Applies while the active picker model is a registered model classed 'local'; providers (default llama.cpp/lmstudio/ollama) is the fallback for models NOT in the registry. Everything else uses pi's built-in compaction untouched. mode: 'arc' = deterministic compaction digest (no model call, instant, recall recovers exact content), 'checkpoint' = LLM-written structured checkpoint, 'off' = pi default. compactAtTokens = compact EARLY while a context.providers provider is active — pi's own threshold (contextWindow - reserveTokens) is minutes of prompt re-ingest too late on a local server. idleCompactMinutes = also compact after N idle minutes past half the threshold (cost lands while nobody waits). pruner = ingestion-time head/tail trim of oversized bash/powershell outputs (cache-neutral: trimmed ONCE at capture, full output stashed for recall). recall = transcript search (exact regex primary, BM25 fallback) + full entry read-back; rerank = judge-score the fuzzy BM25 candidates and drop confidently-irrelevant ones before the model chases them (exact matches never reranked). notes = model-written facts pinned VERBATIM into every digest; reminderTokens = pre-compaction reminder lead so the model pins state before the cut (0 = off).",
 		"$comment_memory": "judgeDigest (default true) = classifier-scored compaction: one judge call scores every non-user digest step drop / keep one-line / EXPAND VERBATIM — budget goes to what still matters instead of what is newest — and overflowing pinned notes are expired by staleness instead of age; no judge = plain deterministic digest. memory (default true) = task-start memory gate: once anything was compacted or pruned, each new task BM25-searches the raw transcript and the judge steers in confidently-relevant snippets (max 2) so a cheap worker does not re-derive earlier work; no judge = inject nothing. Hallucination containment: everything is verbatim transcript bytes (nothing generated), and the two context-MUTATING actions — memory injections and digest drops — act on calibrated-tier answers only; the naive-llm fallback may block/rerank/route but never puts words in the context or deletes kept steps.",
 		"providers": ["llama.cpp", "lmstudio", "ollama"],
 		"mode": "arc",
@@ -148,7 +180,7 @@
 	"rescue": {
 		"enabled": true,
 		"localProviders": ["llama.cpp", "lmstudio", "ollama", "abliteration-ai", "baseten"],
-		"$comment": "Captures manual local->frontier /model switches as rescue episodes in the consult-log. /distill drafts a lesson from the last episode using distillModel (default: prescreen.model). localProviders doubles as the CHEAP-WORKER list: message-injecting/blocking machinery (triage steers, gate nudges, tool guard) arms only while the active picker model is from one of these. 'Local' means cheap, not physically local — budget cloud hosts (baseten, abliteration-ai) belong here too. The worker is never designated; it is whatever pi's model picker has active.",
+		"$comment": "Captures manual local->frontier /model switches as rescue episodes in the consult-log. /distill drafts a lesson from the last episode using distillModel (default: prescreen.model). localProviders doubles as the cheap-worker FALLBACK: a picker model registered in `models` is classified by its own classes (cheap/local arm the steering machinery — triage steers, gate nudges, tool guard); this list only decides for unregistered models. 'Local' means cheap, not physically local — budget cloud hosts (baseten, abliteration-ai) belong here too. The worker is never designated; it is whatever pi's model picker has active.",
 		"distillModel": "qwen-27b"
 	}
 }

@@ -22,7 +22,7 @@
 // assistant message with its model.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { DEFAULT_LOCAL_PROVIDERS, loadConfig, logDir } from "../lib/config.ts";
+import { isLocalWorker, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso, type RescueRecord, type RescueToolEvent } from "../lib/consult-log.ts";
 import { distillRescue, latestRescueRecord } from "../lib/distill.ts";
 
@@ -44,10 +44,6 @@ interface Episode {
 function modelId(model: any): string {
 	if (!model) return "unknown";
 	return `${model.provider ?? "?"}/${model.id ?? model.modelId ?? "?"}`;
-}
-
-function isLocal(model: any, localProviders: string[]): boolean {
-	return localProviders.includes(String(model?.provider ?? ""));
 }
 
 function previewToolInput(toolName: string, input: any): string {
@@ -133,18 +129,20 @@ export default function rescue(pi: ExtensionAPI) {
 	pi.on("model_select", async (event: any, ctx) => {
 		const cfg = loadConfig(ctx.cwd);
 		if (cfg.rescue?.enabled === false) return;
-		const localProviders = cfg.rescue?.localProviders ?? DEFAULT_LOCAL_PROVIDERS;
 		const prev = event.previousModel;
 		const next = event.model;
 		if (!prev || !next) return;
 
-		if (episode && isLocal(next, localProviders)) {
-			// Back to a local model: the rescue is over.
+		// Cheap-worker classification is registry-first (classes cheap/local),
+		// rescue.localProviders for unregistered models — same rule as the
+		// steering machinery, so "rescue" means cheap -> non-cheap everywhere.
+		if (episode && isLocalWorker(next, cfg)) {
+			// Back to a cheap worker: the rescue is over.
 			finishEpisode(ctx, "switch_back");
 			return;
 		}
-		if (!episode && isLocal(prev, localProviders) && !isLocal(next, localProviders)) {
-			// Local → frontier: start capturing.
+		if (!episode && isLocalWorker(prev, cfg) && !isLocalWorker(next, cfg)) {
+			// Cheap worker → frontier: start capturing.
 			episode = {
 				cid: newCid(),
 				startedTs: nowIso(),

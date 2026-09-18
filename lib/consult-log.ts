@@ -58,6 +58,12 @@ export interface ConsultRequestRecord extends BaseRecord {
 	 */
 	proposedConsultant?: string;
 	chosenBy?: "model" | "default" | "judge" | "user_override" | "auto";
+	/**
+	 * Models excluded from routing/resolution at request time because they
+	 * were offline (name -> reason). Explains later why a request went to
+	 * a fallback: the preferred model was not available, not unpicked.
+	 */
+	offlineExcluded?: Record<string, string>;
 	/** Session mode active when the consult was requested (routing feature). */
 	mode?: string;
 }
@@ -190,6 +196,13 @@ export interface TriageRecord extends BaseRecord {
 	task: string;
 	/** Difficulty score 0..3 over the triage levels (may land between). */
 	difficulty?: number;
+	/**
+	 * Refusal-risk score 0..2 (benign / some policy surface / strict model
+	 * will likely refuse). Policy-sensitive or high-risk security work.
+	 * Ordinary decompile-to-
+	 * understand stays aligned.
+	 */
+	refusalRisk?: number;
 	route: "local" | "plan_first" | "frontier";
 	confidence: number;
 	/** Session stage at decision time. */
@@ -198,6 +211,12 @@ export interface TriageRecord extends BaseRecord {
 	/** Rescuer the hint named, when one was sent. */
 	rescuer?: string;
 	hintSent: boolean;
+	/** Abliterated-class model the session hopped to on high refusal risk. */
+	switchedTo?: string;
+	/** Actual safety transition taken for this turn. */
+	safetyAction?: "hop" | "dwell" | "return";
+	/** Confidence of the refusal score (hop) or conversation-flow choice. */
+	safetyConfidence?: number;
 }
 
 export interface RescueToolEvent {

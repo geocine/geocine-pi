@@ -17,7 +17,7 @@ export interface ModelConfig {
 	/**
 	 * What this model is the right rescuer FOR, in one line
 	 * (e.g. "hard debugging and root-cause analysis", "architecture and
-	 * planning", "content strict models falsely refuse"). Shown to the
+	 * planning", "policy-sensitive or high-risk security work"). Shown to the
 	 * local model in the consult tool description (it proposes a rescuer
 	 * by role) and to the user in the approval prompt.
 	 */
@@ -31,8 +31,20 @@ export interface ModelConfig {
 	 * pick the cheapest model whose capabilities cover the need — the
 	 * standing goal is to spend as few LLM tokens as possible. A model
 	 * classed "default" is the fallback when nothing else decides.
+	 * Capability tags belong here too (e.g. "vision" for models that
+	 * handle images well): they make the capability addressable
+	 * (/consult @vision) and visible to the router.
 	 */
 	classes?: string[];
+	/**
+	 * Preference order among models sharing a class (1 = first choice).
+	 * When several carry the same class — three "frontier" models, say —
+	 * a class handle resolves to the best-ranked carrier, and the judge's
+	 * route node sees the rank as the tie-breaker when role and classes
+	 * fit equally. Unranked models sort after ranked ones, then config
+	 * order. An explicit "default" class still wins the no-name fallback.
+	 */
+	rank?: number;
 	/** pi --thinking value. */
 	thinking?: string;
 	/**
@@ -98,10 +110,15 @@ export interface WatchdogConfig {
 
 export interface TriageConfig {
 	/**
-	 * Judge-powered task routing: at task start, score difficulty for the
-	 * local model and pick a route (local / plan-first / frontier); mid-task,
-	 * an escalate-now probability rides the watchdog's every-turn judge
-	 * call. Requires a configured judge — silently off without one.
+	 * Judge-powered task routing: at task start, score difficulty AND
+	 * refusal risk (policy-sensitive or high-risk security work — ordinary
+	 * decompile-to-understand stays aligned) for
+	 * the local model, then pick a route (local / plan-first / frontier).
+	 * High refusal risk on a strict cheap worker opens an abliterated-model
+	 * lease. Each later user turn is judged to dwell there or return to the
+	 * picker model; ambiguity dwells to avoid model/cache ping-pong.
+	 * Mid-task, an escalate-now probability rides the watchdog's every-turn
+	 * judge call. Requires a configured judge — silently off without one.
 	 * Default true.
 	 */
 	enabled?: boolean;
@@ -181,6 +198,10 @@ export interface RescueConfig {
 	 * Providers considered "local" (free). A model_select away from one of
 	 * these to any other provider starts a rescue episode.
 	 * Default: ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"].
+	 * For cheap-worker ARMING (triage steers, gate nudges, tool guard) this
+	 * list is only the fallback: a picker model found in the `models`
+	 * collection is classified by its own classes (cheap/local) instead —
+	 * see isLocalWorker.
 	 */
 	localProviders?: string[];
 	/** Model used by /distill to draft lessons. Default: prescreen model. */
@@ -189,13 +210,15 @@ export interface RescueConfig {
 
 export interface ContextConfig {
 	/**
-	 * Providers whose sessions get context-keeper treatment (early/idle
+	 * Fallback provider list for context-keeper treatment (early/idle
 	 * compaction, pre-compaction reminder, ingestion pruner, and the
-	 * arc/checkpoint compaction override). Any model from another provider
-	 * uses pi's built-in compaction untouched. Default: true local servers
-	 * (llama.cpp, lmstudio, ollama) — API providers, however cheap, ingest
-	 * prompts fast enough that pi's own threshold is fine. Distinct from
-	 * rescue.localProviders, which is about rescue-capture semantics.
+	 * arc/checkpoint compaction override). A picker model found in the
+	 * `models` collection is decided by its own classes instead — the
+	 * "local" class opts it in; this list only covers unregistered models.
+	 * Default: true local servers (llama.cpp, lmstudio, ollama) — API
+	 * providers, however cheap, ingest prompts fast enough that pi's own
+	 * threshold is fine. Distinct from rescue.localProviders, which is
+	 * about rescue-capture semantics. See contextManaged.
 	 */
 	providers?: string[];
 	/**
@@ -338,11 +361,35 @@ export interface PdfConfig {
 export const DEFAULT_LOCAL_PROVIDERS = ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"];
 
 /**
+ * The registry entry describing the session's ACTIVE model — whatever
+ * pi's model picker has selected, matched by provider + model id against
+ * the `models` collection. undefined for models the user never registered.
+ * This is what lets the fabric read a picker model's declared classes and
+ * capabilities instead of guessing from its provider name.
+ */
+export function registryEntry(
+	model: unknown,
+	cfg: GeocineConfig,
+): { name: string; model: ModelConfig } | undefined {
+	const m = model as { provider?: string; id?: string } | undefined;
+	if (!m?.provider || !m?.id) return undefined;
+	for (const [name, c] of Object.entries(cfg.models)) {
+		if (c.provider === m.provider && c.model === m.id) return { name, model: c };
+	}
+	return undefined;
+}
+
+/**
  * True when the session's ACTIVE model — whatever pi's model picker has
- * selected, read per event, never designated — runs on a cheap provider
- * (rescue.localProviders). "Local" is shorthand for cheap, not physically
- * local: the default list already includes hosted abliteration-ai, and a
- * budget cloud host (e.g. baseten running Qwen) belongs there too.
+ * selected, read per event, never designated — is a cheap worker.
+ *
+ * Registry first: a model found in the `models` collection is a cheap
+ * worker iff it carries the "cheap" or "local" class — its own declared
+ * capabilities decide, whoever hosts it. Only unregistered models fall
+ * back to the provider heuristic (rescue.localProviders). "Local" is
+ * shorthand for cheap, not physically local: the default list already
+ * includes hosted abliteration-ai, and a budget cloud host (e.g. baseten
+ * running Qwen) belongs there too.
  *
  * Precondition for all escalation machinery that INJECTS messages or
  * blocks calls — triage steers, mid-task escalate suggestions,
@@ -353,9 +400,28 @@ export const DEFAULT_LOCAL_PROVIDERS = ["llama.cpp", "lmstudio", "ollama", "abli
  * work, never for deciding.
  */
 export function isLocalWorker(model: unknown, cfg: GeocineConfig): boolean {
+	const entry = registryEntry(model, cfg);
+	if (entry) {
+		const classes = entry.model.classes ?? [];
+		return classes.includes("cheap") || classes.includes("local");
+	}
 	const provider = (model as { provider?: string } | undefined)?.provider;
 	if (!provider) return false;
 	return (cfg.rescue?.localProviders ?? DEFAULT_LOCAL_PROVIDERS).includes(provider);
+}
+
+/**
+ * True when the active model is meant to answer work that strict/aligned
+ * models decline: policy-sensitive content or high-risk security work.
+ * Ordinary
+ * decompile-to-understand is not this class.
+ * Registry first (`abliterated` class); unregistered abliteration-ai
+ * hosts count too.
+ */
+export function isAbliterated(model: unknown, cfg: GeocineConfig): boolean {
+	const entry = registryEntry(model, cfg);
+	if (entry) return (entry.model.classes ?? []).includes("abliterated");
+	return (model as { provider?: string } | undefined)?.provider === "abliteration-ai";
 }
 
 /**
@@ -365,6 +431,23 @@ export function isLocalWorker(model: unknown, cfg: GeocineConfig): boolean {
  * with big windows — pi's built-in compaction handles it.
  */
 export const DEFAULT_CONTEXT_PROVIDERS = ["llama.cpp", "lmstudio", "ollama"];
+
+/**
+ * Whether context-keeper machinery (early/idle compaction, digest
+ * override, pruner, reminder, memory gate) applies to the active model.
+ * Registry first: a registered model gets the keeper iff it carries the
+ * "local" class — the class that means "served from a slow-ingest local
+ * server", exactly what the keeper exists for. Unregistered models fall
+ * back to the context.providers list. Cloud APIs, however cheap, ingest
+ * prompts fast enough that pi's built-in compaction is fine.
+ */
+export function contextManaged(model: unknown, cfg: GeocineConfig): boolean {
+	const entry = registryEntry(model, cfg);
+	if (entry) return (entry.model.classes ?? []).includes("local");
+	const provider = (model as { provider?: string } | undefined)?.provider;
+	if (!provider) return false;
+	return (cfg.context?.providers ?? DEFAULT_CONTEXT_PROVIDERS).includes(provider);
+}
 
 export interface GeocineConfig {
 	models: Record<string, ModelConfig>;
@@ -440,16 +523,46 @@ export function shouldPrescreen(model: ModelConfig): boolean {
 	return model.prescreen === true;
 }
 
+/** Sort model names by preference: rank first (1 = best, unranked last),
+ *  then "default"-classed, then config order (stable sort keeps it). */
+function byPreference(pool: Record<string, ModelConfig>, names: string[]): string[] {
+	return [...names].sort((a, b) => {
+		const ra = pool[a].rank ?? Number.POSITIVE_INFINITY;
+		const rb = pool[b].rank ?? Number.POSITIVE_INFINITY;
+		if (ra !== rb) return ra - rb;
+		const da = pool[a].classes?.includes("default") ? 0 : 1;
+		const db = pool[b].classes?.includes("default") ? 0 : 1;
+		return da - db;
+	});
+}
+
+/**
+ * Among abliterated models, a `local` carrier (llama.cpp) always beats a
+ * hosted one. Rank breaks ties inside that split. Hosted abliterated is
+ * the fallback when the local uncensored server cannot be selected.
+ */
+export function orderAbliterated(pool: Record<string, ModelConfig>, names: string[]): string[] {
+	return [...names].sort((a, b) => {
+		const la = pool[a].classes?.includes("local") ? 0 : 1;
+		const lb = pool[b].classes?.includes("local") ? 0 : 1;
+		if (la !== lb) return la - lb;
+		const ra = pool[a].rank ?? Number.POSITIVE_INFINITY;
+		const rb = pool[b].rank ?? Number.POSITIVE_INFINITY;
+		return ra - rb;
+	});
+}
+
 /**
  * Resolve `wanted` within a pool: exact name first, then as a capability
- * class (preferring a model also classed "default"). Names are just
- * map labels — classes are the selection language.
+ * class — the best-ranked carrier wins ties (see byPreference). Names are
+ * just map labels — classes are the selection language.
  */
 function pickByNameOrClass(pool: Record<string, ModelConfig>, wanted: string): string | undefined {
 	if (pool[wanted]) return wanted;
 	const inClass = Object.keys(pool).filter((n) => pool[n].classes?.includes(wanted));
 	if (inClass.length === 0) return undefined;
-	return inClass.find((n) => pool[n].classes?.includes("default")) ?? inClass[0];
+	if (wanted === "abliterated") return orderAbliterated(pool, inClass)[0];
+	return byPreference(pool, inClass)[0];
 }
 
 /** The addressable handles of a pool (classes; @key only when unclassed). */
@@ -474,7 +587,9 @@ export function resolveModel(
 		return { error: `No models configured. Create ${CONFIG_FILE} (see geocine.example.json).` };
 	}
 	if (!name) {
-		const fallback = names.find((n) => cfg.models[n].classes?.includes("default")) ?? names[0];
+		// "default" class is the explicit no-name marker; without one the
+		// best-ranked model overall stands in.
+		const fallback = names.find((n) => cfg.models[n].classes?.includes("default")) ?? byPreference(cfg.models, names)[0];
 		return { name: fallback, model: cfg.models[fallback] };
 	}
 	const picked = pickByNameOrClass(cfg.models, name);

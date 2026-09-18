@@ -20,7 +20,7 @@
   <!-- LOCAL WORKER (green) -->
   <rect x="22" y="58" width="224" height="140" rx="8" fill="#0f131a" stroke="#aad94c" stroke-width="1.5"/>
   <text x="134" y="82" text-anchor="middle" font-size="13" font-weight="700" fill="#aad94c">WORKER (pi model picker)</text>
-  <text x="134" y="99" text-anchor="middle" font-size="11" fill="#bfbdb6">whatever you pick owns the loop</text>
+  <text x="134" y="99" text-anchor="middle" font-size="11" fill="#bfbdb6">refusal hop; TypeSafe decides dwell or return</text>
   <line x1="40" y1="108" x2="228" y2="108" stroke="#1c212b" stroke-width="1"/>
   <text x="134" y="124" text-anchor="middle" font-size="10" fill="#8a9199">harness: trained tool dialects per family</text>
   <text x="134" y="139" text-anchor="middle" font-size="10" fill="#8a9199">todo · web · ask_user · read_pdf · apply_patch</text>
@@ -84,8 +84,8 @@
 
   <rect x="672" y="264" width="228" height="70" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
   <text x="786" y="284" text-anchor="middle" font-size="12" font-weight="600" fill="#bfbdb6">abliteration.ai/abliterated-model</text>
-  <text x="786" y="301" text-anchor="middle" font-size="10" fill="#8a9199">content strict models falsely refuse</text>
-  <text x="786" y="317" text-anchor="middle" font-size="10" fill="#565b66">RE, security · {abliterated, cheap}</text>
+  <text x="786" y="301" text-anchor="middle" font-size="10" fill="#8a9199">policy-sensitive work that strict models decline</text>
+  <text x="786" y="317" text-anchor="middle" font-size="10" fill="#565b66">high-risk security · {abliterated, cheap}</text>
 
   <text x="786" y="349" text-anchor="middle" font-size="10" font-style="italic" fill="#565b66">register everything, tag classes — cheapest wins</text>
 
@@ -103,8 +103,8 @@
 
   <rect x="36" y="430" width="184" height="54" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
   <text x="128" y="446" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">triage</text>
-  <text x="128" y="460" text-anchor="middle" font-size="9" fill="#8a9199">new task → local / plan-first / frontier</text>
-  <text x="128" y="473" text-anchor="middle" font-size="9" fill="#565b66">difficulty weighed vs session stage</text>
+  <text x="128" y="460" text-anchor="middle" font-size="9" fill="#8a9199">hardness route + refusal hop lease</text>
+  <text x="128" y="473" text-anchor="middle" font-size="9" fill="#565b66">conversation flow → dwell / return</text>
 
   <rect x="229" y="430" width="184" height="54" rx="6" fill="#131a24" stroke="#1c212b" stroke-width="1"/>
   <text x="321" y="446" text-anchor="middle" font-size="11" font-weight="600" fill="#e6b450">command guard</text>

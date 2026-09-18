@@ -1,106 +1,152 @@
-# Training data: the decision log, judge trace, and rescue episodes
+# Which logs can teach the system?
 
-The point of logging everything is a flywheel with two loops: fine-tune the
-**local worker** on rescue episodes and briefing→advice pairs so it consults
-less, and train your own **offline judge head** on the trace of every fabric
-decision so the decisions themselves run free.
+A log line isn't training data because it exists. A useful row connects
+what the system saw, what it chose, and what happened next.
 
-## Decision log
+**Human corrections and real outcomes outrank classifier guesses.**
 
-Append-only JSONL under `~/.pi/agent/consult-log/YYYY-MM.jsonl`, one
-correlation id (`cid`) per consultation/incident:
+## How does a decision become a dataset row?
 
-`consult_request` (with approval + routing provenance) → `staging`
-(manifest, bytes) → `prescreen` (risk, triggers) → `consult_result`
-(advice, refusal flag, files-read utilization, usage), plus `watchdog`
-verdict records with their decision-time digests, `triage` records
-(task → route with difficulty/escalate probabilities), `gate` records
-(outcome-gate verdicts with their review flags), `guard` records
-(command + risky-probability + blocked/allowed), `tool_guard` records
-(flagged tool call + trigger + wasteful-probability + blocked), `rescue` episode
-records, and `compaction` records (summarizer, tokens replaced, outcome).
+```mermaid
+sequenceDiagram
+    participant R as Runtime
+    participant D as Decision log
+    participant J as Judge trace
+    participant T as Dataset builder
+    participant W as Future worker
+    participant H as Future judge
 
-What each record type trains:
+    R->>D: Outcomes + your overrides
+    R->>J: State + schema + soft labels
+    D->>T: Rescue + advice pairs
+    J->>T: Typed decisions
+    T-->>W: Worker training set
+    T-->>H: Offline judge set
+```
 
-| Signal | Label it provides |
+Nothing from these files enters a future prompt automatically. You must
+promote a lesson yourself.
+
+---
+
+## What does the decision log remember?
+
+`~/.pi/agent/consult-log/YYYY-MM.jsonl` is append-only. One correlation id
+connects a consultation or incident across its records.
+
+| Signal | What it can teach |
 | --- | --- |
-| Approval denials (`approval: "user_no"`) | "should not have consulted here" |
-| Routing overrides (`chosenBy: "user_override"`) | "wrong model for this kind of problem" — including overrides of judge picks |
-| Actual refusals (`refusalSuspected`) | guardrail-predictor labels for the prescreen |
-| Briefing → advice pairs | distillation data for the local model |
-| Watchdog digests → outcomes | escalation-policy training |
-| Triage verdicts (`triage`) | task → route labels for a local router |
-| Outcome-gate verdicts (`gate`) | "was it actually done" / revert / risk-flag labels |
-| Command-guard decisions (`guard`) | destructive-command policy labels |
-| Tool-guard decisions (`tool_guard`) | wasteful-call detection labels for weak tool-callers |
-| Staging manifest vs files actually read | context-curation quality |
+| `approval: "user_no"` | The system shouldn't have consulted |
+| `chosenBy: "user_override"` | The proposed model was wrong |
+| `refusalSuspected` | The pre-screen missed or confirmed a limit |
+| Brief → advice | A local model can imitate specialist reasoning |
+| Watchdog digest → outcome | When to recover or escalate |
+| Triage route + transition | Hardness, refusal risk, hop, dwell, or return |
+| Gate verdict | Whether the work was done |
+| Guard and tool-guard verdicts | Risky commands and wasteful calls |
+| Staged files → files read | Whether the brief carried useful context |
+| Compaction record | What triggered compression and how much it saved |
 
-`/geocine log` shows this month's record counts.
+`/geocine log` shows this month's counts.
 
-## Judge trace
+---
 
-Separate from the decision log: with `judge.trace` on (default), every
-**answered** fabric call appends one row to
-`~/.pi/agent/consult-log/judge-YYYY-MM.jsonl`:
+## What does one judge trace look like?
 
 ```json
-{"ts": "...", "node": "gate", "source": "jev", "elapsedMs": 240,
- "context": "<the serialized state the judge saw>",
- "schema": {"done": {"type": "boolean", "description": "..."}},
- "labels": {"done": {"value": "true", "prob": 0.93, "probs": {...}}}}
+{
+  "ts": "...",
+  "node": "gate",
+  "source": "jev",
+  "elapsedMs": 240,
+  "context": "<serialized state>",
+  "schema": {
+    "done": {
+      "type": "boolean",
+      "description": "..."
+    }
+  },
+  "labels": {
+    "done": {
+      "value": "true",
+      "prob": 0.93,
+      "probs": {}
+    }
+  }
+}
 ```
 
-That `(context, schema, labels)` shape is exactly what a parallel
-constrained-decoding head (a small model answering a whole schema of
-boolean/enum fields in one pass) trains on — noul questions folded to
-boolean fields, choice/score to enum fields, answers kept as soft labels
-with full probability mass. The naive-llm fallback tier prompts with this
-same serialization, so logged rows, fallback inference, and the future
-head share one format: train/serve parity by construction.
+With `judge.trace` enabled, every answered fabric call appends this shape
+to `judge-YYYY-MM.jsonl`.
 
-`source` separates calibrated Jev labels from `naive-llm` ones, so weak
-labels can be filtered or down-weighted at training time. Once your head
-is trained, repoint `judge.provider` at it and every fabric decision —
-triage, watchdog, gate, guard, toolcall, recall, compact, notes, memory,
-routing, prescreen — runs locally at zero marginal cost. `/geocine judge`
-shows per-node call stats and the trace location.
+`context` is what the judge saw. `schema` is the typed question.
+`labels` keeps the answer and its probability mass.
 
-## Rescue episodes
+Noul questions become booleans; choice and score questions become enums.
+The local fallback consumes the same serialization, so training and
+inference don't drift into different formats.
 
-The highest-value pairs come from *manual* rescues: the local model grinds,
-you switch to a frontier model, it fixes the thing. Two capture paths:
+`source` separates calibrated `jev` rows from weaker `naive-llm` rows.
+You can filter or down-weight the weaker labels later.
 
-- **Live**: `extensions/rescue.ts` watches `model_select`. Switching away
-  from a `rescue.localProviders` provider starts an episode; switching back
-  (or session end) writes a `rescue` record: failure digest (the local
-  model's last ~30 entries), the rescuer's tool events, files touched, its
-  final summary.
-- **Retroactive**: pi session JSONL stamps every `model_change` and every
-  assistant message with its model, so history is minable offline:
+---
 
-  ```bash
-  node scripts/mine-rescues.mjs                    # scans ~/.pi/agent/sessions
-  node scripts/mine-rescues.mjs --out rescues.jsonl --min-actions 2
-  ```
+## Where do rescue episodes come from?
 
-  Each output line is `{failure_context, rescue_trajectory, fromModel,
-  toModel, filesTouched, ...}` — SFT-ready raw material: train the local
-  model on (failure context → rescuer trajectory), and the switch events
-  themselves label the escalation policy ("should have consulted here").
+```mermaid
+sequenceDiagram
+    actor U as You
+    participant P as Pi
+    participant R as Rescue capture
+    participant S as Stronger model
+    participant L as Decision log
 
-## Lessons
-
-`/distill` turns the latest rescue episode (this session or from the log)
-into a one-lesson markdown draft under `~/.pi/agent/rescue-lessons/`:
-
+    U->>P: Switch away from cheap worker
+    P->>R: Capture failing tail
+    P->>S: Continue session
+    S-->>P: Work + tool events
+    alt You switch back
+        U->>P: Select original model
+    else Session ends
+        P-->>R: Shutdown
+    end
+    R->>L: Rescue episode
 ```
+
+Live capture starts when you switch from a cheap or local worker to a
+stronger model. It ends when you switch back or close the session.
+
+The row keeps the failing tail, rescuer tool events, touched files, and
+final summary.
+
+You can also mine model changes from old session JSONL:
+
+```bash
+node scripts/mine-rescues.mjs
+node scripts/mine-rescues.mjs --out rescues.jsonl --min-actions 2
+```
+
+Each line pairs `failure_context` with `rescue_trajectory`. The switch
+itself labels the moment when the cheaper worker needed help.
+
+---
+
+## How does one rescue become a lesson?
+
+```markdown
 # <short imperative title>
-**When:** <the recognizable symptom>
-**Do:** <the approach that worked>
+**When:** <recognizable symptom>
+**Do:** <approach that worked>
 **Why the naive approach fails:** <one sentence>
 ```
 
-Drafts have `status: draft` frontmatter and are **never injected into any
-prompt**. Promoting one into `AGENTS.md` or a skill is a deliberate human
-step (`/geocine lessons` → "Paste into editor (to promote)") — the prompt
-never grows without a human decision.
+`/distill` turns the latest rescue into a draft under
+`~/.pi/agent/rescue-lessons/`.
+
+Draft status matters. The lesson stays out of prompts until you promote it
+into `AGENTS.md` or a skill through `/geocine lessons`.
+
+Implementation: `extensions/rescue.ts`, `lib/consult-log.ts`, and
+`lib/judge/serialize.ts`.
+
+**Logs become useful when outcomes can correct the decision that produced them.**

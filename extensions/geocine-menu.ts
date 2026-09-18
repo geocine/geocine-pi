@@ -14,6 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { offlineModels } from "../lib/availability.ts";
 import {
 	CONFIG_FILE,
 	modelHandle,
@@ -44,10 +45,13 @@ async function modelsMenu(ctx: ExtensionContext, cfg: GeocineConfig): Promise<vo
 		return;
 	}
 	const defaultName = defaultModelName(cfg);
+	const offline = await offlineModels(cfg.models, ctx.modelRegistry);
 	const items: SelectItem[] = names.map((n) => {
 		const c = cfg.models[n];
 		const flags = [
+			offline.has(n) ? "OFFLINE" : "",
 			`{${c.classes?.join(", ") || "unclassed"}}`,
+			c.rank !== undefined ? `rank ${c.rank}` : "",
 			c.jail ?? "staged",
 			c.prescreen ? "prescreen" : "",
 			c.autoApprove ? "auto-approved" : "",
@@ -60,7 +64,9 @@ async function modelsMenu(ctx: ExtensionContext, cfg: GeocineConfig): Promise<vo
 			description: `${c.role ?? "general consultant"} — ${flags}`,
 		};
 	});
-	const name = await richSelect(ctx, "Models (* = default rescuer)", items);
+	const name = await richSelect(ctx, "Models (* = default rescuer)", items, {
+		header: offline.size > 0 ? [...offline].map(([n, why]) => `offline: ${n} — ${why}`) : undefined,
+	});
 	if (!name) return;
 	const c = cfg.models[name];
 	const handle = modelHandle(cfg, name);
@@ -287,7 +293,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 				],
 				{
 					header: [
-						`providers: ${(c.providers ?? DEFAULT_CONTEXT_PROVIDERS).join(", ")} (others use pi built-in)`,
+						`applies to: registered models classed "local" (fallback providers: ${(c.providers ?? DEFAULT_CONTEXT_PROVIDERS).join(", ")}); others use pi built-in`,
 						`early compact: ${c.compactAtTokens ? `${c.compactAtTokens} tokens` : "pi default"}${c.idleCompactMinutes ? ` · idle: ${c.idleCompactMinutes}m` : ""}`,
 					],
 				},
@@ -331,7 +337,7 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 					`judge: ${onOff(next)} (persisted)`,
 					`state: ${judgeStatus({ ...(cfg.judge ?? {}), enabled: next }, modelBaseUrl(ctx.model))}`,
 					`trace: ${cfg.judge?.trace === false ? "OFF" : `ON → ${cfg.judge?.traceDir ?? "consult-log"}/judge-YYYY-MM.jsonl (offline-classifier training data)`}`,
-					"Decision fabric nodes: watchdog (stuck/drift, every turn), triage (task difficulty + route), gate (outcome: continue/stop/escalate + revert), guard (destructive-command risk), toolcall (wasteful repeats/retries from local workers), recall (rerank fuzzy transcript-search results), compact (drop/keep/expand per digest step), notes (expire stale pinned notes), memory (steer compacted history into new tasks), route (assigns the model per consult), approve (auto-approves clear consults), prescreen (refusal risk). Heuristics and pi's own approvals remain the fallbacks.",
+					"Decision fabric nodes: watchdog (stuck/drift, every turn), triage (task difficulty + refusal risk + route; refusal hop lease with conversation-flow dwell/return), gate (outcome: continue/stop/escalate + revert), guard (destructive-command risk), toolcall (wasteful repeats/retries from local workers), recall (rerank fuzzy transcript-search results), compact (drop/keep/expand per digest step), notes (expire stale pinned notes), memory (steer compacted history into new tasks), route (assigns the model per consult), approve (auto-approves clear consults), prescreen (refusal risk). Heuristics and pi's own approvals remain the fallbacks.",
 					...judgeFabricStats().map((line) => `  ${line}`),
 				].join("\n"),
 				"info",

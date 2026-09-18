@@ -22,6 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { offlineModels, type PiModelRegistry } from "../lib/availability.ts";
 import {
 	type ModelConfig,
 	modelLabel,
@@ -187,9 +188,9 @@ const PRESCREEN_TRIGGER_NOULS = [
 	},
 	{
 		id: "t_re",
-		label: "reverse-engineering artifacts",
+		label: "high-risk / protection-bypass security work",
 		instructions:
-			"Does `files` contain reverse-engineering artifacts such as decompiled code, binary patches, or protection-bypass material?",
+			"Does `files` or `request` weaponize reverse engineering — protection/DRM bypass, license cracks, malware unpackers for deployment, unauthorized access? Ordinary decompiled code or disassembly to understand a program does not count.",
 	},
 	{
 		id: "t_secrets",
@@ -198,8 +199,9 @@ const PRESCREEN_TRIGGER_NOULS = [
 	},
 	{
 		id: "t_prose",
-		label: "policy-sensitive prose",
-		instructions: "Does `files` contain violent, sexual, extremist, or otherwise policy-sensitive prose?",
+		label: "policy-sensitive prose or media",
+		instructions:
+			"Does `files` or `request` contain NSFW/adult/sexual content (including captions of adult images), or violent, extremist, or otherwise policy-sensitive prose?",
 	},
 ];
 
@@ -220,11 +222,11 @@ async function prescreenWithJudge(
 		refusal_risk: {
 			type: "score",
 			instructions:
-				"The `files` are legitimate local software-development content about to be sent to a strict cloud LLM together with `request`. How likely is that model to FALSELY refuse because the content superficially resembles unsafe material?",
+				"The `files` plus `request` are about to be sent to a strict cloud LLM. How likely is that model to REFUSE? Count NSFW/adult/sexual content and blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Do NOT count ordinary reverse engineering (decompile/disassemble to understand a binary) or defensive analysis — aligned models handle those.",
 			criteria: [
-				"Benign — nothing resembles unsafe material; a refusal is very unlikely",
-				"Some risky-looking surface (security tooling, RE artifacts, secrets); a false refusal is plausible",
-				"Strongly resembles unsafe material; a strict model will likely refuse",
+				"Benign — coding, research, or ordinary reverse engineering; a refusal is very unlikely",
+				"Some risky-looking surface (secrets, security tooling that looks offensive, adult/NSFW mention); a refusal is plausible",
+				"Strict model will likely refuse — explicit NSFW/adult, or blackhat-borderline work (exploit payloads, protection bypass, malware)",
 			],
 		},
 	};
@@ -258,6 +260,7 @@ async function prescreen(
 	question: string,
 	signal: AbortSignal | undefined,
 	workerBaseUrl: string | undefined,
+	registry: PiModelRegistry | undefined,
 ): Promise<PrescreenVerdict> {
 	const maxBytes = cfg.prescreen?.maxBytes ?? PRESCREEN_DEFAULT_MAX_BYTES;
 	let budget = maxBytes;
@@ -290,10 +293,23 @@ async function prescreen(
 			screener: "none",
 		};
 	}
+	// A dead local screener would burn the full runPi timeout to answer
+	// nothing — skip the model screen and let the consult proceed unscreened.
+	const offline = await offlineModels({ [resolved.name]: resolved.model }, registry);
+	const offlineReason = offline.get(resolved.name);
+	if (offlineReason) {
+		return {
+			risk: "unknown",
+			triggers: [],
+			raw: `prescreen model "${resolved.name}" offline: ${offlineReason}`,
+			elapsedMs: 0,
+			screener: `offline:${resolved.name}`,
+		};
+	}
 	const excerpts = files.map((f) => `=== ${f.file} ===\n${f.content}`);
 
 	const prompt = [
-		"You are screening content before it is sent to a strict cloud LLM with aggressive safety guardrails. The work itself is legitimate local software development, but strict models sometimes falsely refuse benign content that superficially resembles unsafe material (exploit-like code, decompiled binaries, credentials, malware artifacts, security tooling).",
+		"You are screening content before it is sent to a strict cloud LLM with aggressive safety guardrails. Strict models refuse NSFW/adult/sexual content and blackhat-borderline work (exploit payloads, protection bypass, malware). Ordinary reverse engineering — decompiling or disassembling to understand a binary — is fine and should score low.",
 		`The request that will accompany this content: ${question}`,
 		"Content to screen:",
 		excerpts.join("\n\n") || "(no staged files)",
@@ -339,7 +355,8 @@ function rosterLine(name: string, c: ModelConfig, isDefault: boolean): string {
 	// Classes are the public handles; the map key appears only for
 	// unclassed consultants (nothing else can address them).
 	const handles = c.classes?.length ? c.classes.join(", ") : `@${name}`;
-	return `${c.provider ?? "?"}/${c.model}${isDefault ? " (default)" : ""} {${handles}} — ${role}`;
+	const rank = c.rank !== undefined ? ` #${c.rank}` : "";
+	return `${c.provider ?? "?"}/${c.model}${isDefault ? " (default)" : ""} {${handles}}${rank} — ${role}`;
 }
 
 /**
@@ -356,23 +373,29 @@ export function buildRoster(cfg: GeocineConfig): string {
  * Judge-assigned rescuer (the fabric's "route" node): when the model does
  * not name a class, the judge picks whose ROLE and classes fit the
  * question — weighing cost (free local consultants when their role covers
- * the need) and guardrail fit (strict cloud models falsely refuse
- * RE/exploit-adjacent content). Every consult is routed per task across
+ * the need) and guardrail fit (strict models may decline policy-sensitive
+ * or high-risk security work; ordinary decompile-to-understand stays
+ * aligned). Every consult is
+ * routed per task across
  * the whole roster. Falls back to the static default below minConfidence
  * or without a judge; the user still owns the final choice at the
  * approval gate.
  */
 async function routeModel(
 	cfg: GeocineConfig,
+	pool: Record<string, ModelConfig>,
 	question: string,
 	contextNote: string | undefined,
 	files: string[],
 	workerBaseUrl: string | undefined,
 ): Promise<string | undefined> {
-	const pool = cfg.models;
 	const names = Object.keys(pool);
 	if (names.length < 2) return undefined;
 	const locals = cfg.rescue?.localProviders ?? DEFAULT_LOCAL_PROVIDERS;
+	// Cost from the entry's own classes; the provider list only covers
+	// unclassed entries.
+	const isCheap = (c: ModelConfig) =>
+		c.classes?.includes("cheap") || c.classes?.includes("local") || locals.includes(c.provider ?? "");
 	const result = await judge(cfg.judge, {
 		state: {
 			question: question.slice(0, 1200),
@@ -385,10 +408,11 @@ async function routeModel(
 						role: c.role ?? "general consultant",
 						classes: c.classes ?? [],
 						model: `${c.provider ?? "?"}/${c.model}`,
-						cost: locals.includes(c.provider ?? "") ? "free (local)" : "paid (frontier)",
+						cost: isCheap(c) ? "cheap (free/budget)" : "paid (frontier)",
 						guardrails: c.prescreen
-							? "strict — may falsely refuse sensitive content (RE, exploits, secrets)"
+							? "strict — may decline policy-sensitive or high-risk security work; ordinary decompile-to-understand is fine"
 							: "permissive",
+						...(c.rank !== undefined ? { rank: c.rank } : {}),
 					},
 				]),
 			),
@@ -397,7 +421,7 @@ async function routeModel(
 			rescuer: {
 				type: "choice",
 				instructions:
-					"Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Avoid strict-guardrail models when the content looks likely to trigger a false refusal (reverse engineering, exploit-adjacent code, secrets, sensitive prose) — prefer an abliterated-class one there.",
+					"Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Match capability tags to the question — e.g. a question about an image or screenshot needs a vision-classed model. Avoid strict-guardrail models when the content looks likely to trigger a refusal — NSFW/adult/sexual content (including image captions), or blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Ordinary reverse engineering (decompile/disassemble to understand a binary, defensive analysis) stays on aligned models. Prefer an abliterated-class one only for the refusal cases; among those, prefer one also classed local over a hosted abliterated fallback. When several fit equally, prefer the lower `rank` (1 = first choice).",
 				criteria: Object.fromEntries(names.map((n) => [n, pool[n].role ?? null])),
 			},
 		},
@@ -480,6 +504,7 @@ async function gateConsult(
 	proposedBy: "model" | "default" | "judge",
 	question: string,
 	files: string[],
+	offline: Map<string, string>,
 ): Promise<GateResult> {
 	const take = (approval: Approval, chosenBy: ChosenBy): GateResult => ({
 		approved: true,
@@ -543,12 +568,17 @@ async function gateConsult(
 	if (choice === "pick") {
 		const pool = cfg.models;
 		const defaultName = defaultModelName(cfg);
-		const rosterItems: SelectItem[] = Object.entries(pool).map(([n, c]) => ({
-			value: n,
-			label: `${n === defaultName ? "* " : "  "}${modelLabel(c)}`,
-			description: `${c.role ?? "general consultant"} — {${c.classes?.join(", ") || "unclassed"}} · ${c.jail ?? "staged"}`,
-		}));
-		const name = await richSelect(ctx, "Who should rescue this?", rosterItems);
+		// Offline models are not choices — a picked rescuer must be able to run.
+		const rosterItems: SelectItem[] = Object.entries(pool)
+			.filter(([n]) => !offline.has(n))
+			.map(([n, c]) => ({
+				value: n,
+				label: `${n === defaultName ? "* " : "  "}${modelLabel(c)}`,
+				description: `${c.role ?? "general consultant"} — {${c.classes?.join(", ") || "unclassed"}}${c.rank !== undefined ? ` #${c.rank}` : ""} · ${c.jail ?? "staged"}`,
+			}));
+		const name = await richSelect(ctx, "Who should rescue this?", rosterItems, {
+			header: offline.size > 0 ? [...offline].map(([n, why]) => `offline: ${n} — ${why}`) : undefined,
+		});
 		if (!name) return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
 		return {
 			approved: true,
@@ -604,7 +634,7 @@ async function consult(
 	signal: AbortSignal | undefined,
 	notify: (msg: string) => void,
 	approval: Approval,
-	routing?: { proposedConsultant: string; chosenBy: ChosenBy; approveP?: number },
+	routing?: { proposedConsultant?: string; chosenBy?: ChosenBy; approveP?: number; offline?: Map<string, string> },
 	onProgress?: (progress: PiProgress) => void,
 ): Promise<ConsultOutcome> {
 	const dir = logDir(cfg);
@@ -625,6 +655,7 @@ async function consult(
 		proposedConsultant: routing?.proposedConsultant,
 		approveP: routing?.approveP,
 		chosenBy: routing?.chosenBy,
+		offlineExcluded: routing?.offline?.size ? Object.fromEntries(routing.offline) : undefined,
 	});
 
 	// 1. Stage (context firewall) unless running in place.
@@ -654,7 +685,7 @@ async function consult(
 	let reframe: string | undefined;
 	if (shouldPrescreen(model) && staging && !noWorkspace) {
 		notify(`consult: pre-screening ${staging.files.length} staged file(s) locally…`);
-		const verdict = await prescreen(cfg, cwd, staging, question, signal, modelBaseUrl(ctx.model));
+		const verdict = await prescreen(cfg, cwd, staging, question, signal, modelBaseUrl(ctx.model), ctx.modelRegistry);
 		appendRecord(dir, {
 			type: "prescreen",
 			...base,
@@ -849,20 +880,39 @@ export default function advisor(pi: ExtensionAPI) {
 		}),
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const cfg = loadConfig(ctx.cwd);
+			// Availability first: offline models (llama.cpp server down, or
+			// unknown to pi) are not consult candidates at all — the router
+			// never sees them and a class resolves to an online carrier.
+			const offline = await offlineModels(cfg.models, ctx.modelRegistry);
+			const available = Object.fromEntries(Object.entries(cfg.models).filter(([n]) => !offline.has(n)));
 			// Routing: an explicit model proposal stands; otherwise the judge
 			// assigns by role/cost/guardrail fit, and only then the static
 			// default.
 			let proposedBy: "model" | "default" | "judge" = params.model ? "model" : "default";
 			let wanted = params.model;
 			if (!wanted) {
-				const routed = await routeModel(cfg, params.question, params.context, params.files ?? [], modelBaseUrl(ctx.model));
+				const routed = await routeModel(cfg, available, params.question, params.context, params.files ?? [], modelBaseUrl(ctx.model));
 				if (routed) {
 					wanted = routed;
 					proposedBy = "judge";
 				}
 			}
-			const resolved = resolveModel(cfg, wanted);
+			const resolved = resolveModel({ ...cfg, models: available }, wanted);
 			if ("error" in resolved) {
+				// Distinguish "no such model" from "it exists but is offline".
+				const full = resolveModel(cfg, wanted);
+				if (!("error" in full)) {
+					const why = offline.get(full.name) ?? "offline";
+					return {
+						content: [
+							{
+								type: "text",
+								text: `The "${full.name}" model (${modelLabel(full.model)}) is offline: ${why}. Pick another model or class, or continue without consulting.`,
+							},
+						],
+						details: {},
+					};
+				}
 				return { content: [{ type: "text", text: resolved.error }], details: {} };
 			}
 			const cid = newCid();
@@ -877,6 +927,7 @@ export default function advisor(pi: ExtensionAPI) {
 				proposedBy,
 				params.question,
 				params.files ?? [],
+				offline,
 			);
 			if (!gate.approved) {
 				// A denied request is itself a training label: log it.
@@ -894,6 +945,7 @@ export default function advisor(pi: ExtensionAPI) {
 					approval: "user_no",
 					proposedConsultant: resolved.name,
 					chosenBy: proposedBy,
+					offlineExcluded: offline.size ? Object.fromEntries(offline) : undefined,
 				});
 				return {
 					content: [
@@ -939,7 +991,7 @@ export default function advisor(pi: ExtensionAPI) {
 				signal,
 				(msg) => ctx.ui.setStatus("advisor", msg),
 				gate.approval,
-				{ proposedConsultant: resolved.name, chosenBy: gate.chosenBy, approveP: gate.approveP },
+				{ proposedConsultant: resolved.name, chosenBy: gate.chosenBy, approveP: gate.approveP, offline },
 				streamProgress,
 			);
 			ctx.ui.setStatus("advisor", undefined);
@@ -987,8 +1039,15 @@ export default function advisor(pi: ExtensionAPI) {
 				return;
 			}
 			const cfg = loadConfig(ctx.cwd);
-			const resolved = resolveModel(cfg, modelName);
+			const offline = await offlineModels(cfg.models, ctx.modelRegistry);
+			const available = Object.fromEntries(Object.entries(cfg.models).filter(([n]) => !offline.has(n)));
+			const resolved = resolveModel({ ...cfg, models: available }, modelName);
 			if ("error" in resolved) {
+				const full = resolveModel(cfg, modelName);
+				if (!("error" in full)) {
+					ctx.ui.notify(`${full.name} is offline: ${offline.get(full.name) ?? "offline"}`, "error");
+					return;
+				}
 				ctx.ui.notify(resolved.error, "error");
 				return;
 			}
@@ -1011,7 +1070,7 @@ export default function advisor(pi: ExtensionAPI) {
 				undefined,
 				(msg) => ctx.ui.setStatus("advisor", msg),
 				"user_command",
-				undefined,
+				{ offline },
 				// Stream the consultant's live thinking/answer into the footer.
 				(p) => {
 					const tail = p.text.replace(/\s+/g, " ").trim().slice(-90);
@@ -1036,8 +1095,10 @@ export default function advisor(pi: ExtensionAPI) {
 				return;
 			}
 			const defaultName = defaultModelName(cfg);
+			const offline = await offlineModels(cfg.models, ctx.modelRegistry);
 			const lines = names.map(([name, c]) => {
 				const flags = [
+					c.rank !== undefined ? `rank ${c.rank}` : "",
 					c.jail ?? "staged",
 					shouldPrescreen(c) ? "prescreen" : "direct",
 					c.autoApprove ? "auto-approved" : "",
@@ -1045,7 +1106,8 @@ export default function advisor(pi: ExtensionAPI) {
 				]
 					.filter(Boolean)
 					.join(", ");
-				return `${modelLabel(c)} {${c.classes?.join(", ") || "unclassed"}} (${flags})${c.role ? ` — ${c.role}` : ""}`;
+				const off = offline.has(name) ? ` — OFFLINE: ${offline.get(name)}` : "";
+				return `${modelLabel(c)} {${c.classes?.join(", ") || "unclassed"}} (${flags})${c.role ? ` — ${c.role}` : ""}${off}`;
 			});
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
