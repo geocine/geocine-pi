@@ -106,7 +106,7 @@
 	},
 
 	"gate": {
-		"$comment": "Outcome gate (needs a configured judge). When the agent settles, the judge verifies the WORK PRODUCT — git diff read directly, test/lint outputs captured from what the agent already ran — and decides continue (nudge local on) / stop (done or needs you) / escalate (suggest consult). The same call also answers review flags in parallel: revert (checks regressed while diff grew), regression_risk, scope_creep, architectural_change, needs_more_tests, and needs_human — which suppresses nudges entirely at human decision points. maxNudgesPerTask caps automatic re-runs; a nudge starts a new local run, so nudges also require a cheap main model (registered classes cheap/local, else rescue.localProviders) — expensive models get the verdict as a status line only.",
+		"$comment": "Outcome gate (needs a configured judge). When the agent settles, the judge verifies the WORK PRODUCT — git diff read directly, test/lint outputs captured from what the agent already ran — and decides continue (fix forward) / replan (revert to the last good state, re-approach fresh) / stop (done or needs you) / escalate (suggest consult). The same call also answers review flags in parallel: regression_risk, scope_creep, architectural_change, needs_more_tests, and needs_human — which suppresses nudges entirely at human decision points. maxNudgesPerTask caps automatic re-runs; a nudge starts a new local run, so nudges also require a cheap main model (registered classes cheap/local, else rescue.localProviders) — expensive models get the verdict as a status line only. /calibration reads the decision log back and shows whether the confidences behind these thresholds track reality.",
 		"enabled": true,
 		"maxNudgesPerTask": 1,
 		"maxDiffChars": 8000

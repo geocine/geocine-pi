@@ -49,7 +49,12 @@ export interface ConsultRequestRecord extends BaseRecord {
 	 * requests — direct training labels for "should not have consulted".
 	 */
 	approval?: "user_yes" | "user_no" | "always_allow" | "auto" | "judge_auto" | "headless" | "user_command";
-	/** Judge confidence when the fabric's approve node cleared this consult. */
+	/**
+	 * The fabric's approve-node probability, whenever the node answered —
+	 * including when it stayed below the auto-approve threshold and the
+	 * user decided. approveP + a user_yes/user_no approval is a calibration
+	 * pair: it says whether the node's confidence tracks user agreement.
+	 */
 	approveP?: number;
 	/**
 	 * Routing provenance: which rescuer the model proposed vs who actually
@@ -161,8 +166,6 @@ export interface GateRecord extends BaseRecord {
 	wantsChangesP?: number;
 	/** Judge's "complete and correct" probability from the evidence. */
 	doneP?: number;
-	/** Judge's "worse than before — revert beats forward-fixing" probability. */
-	revertP?: number;
 	/** Risk that the diff breaks existing behavior beyond the task. */
 	regressionP?: number;
 	/** Probability the diff contains off-task changes. */
@@ -173,7 +176,7 @@ export interface GateRecord extends BaseRecord {
 	needsTestsP?: number;
 	/** Probability a human decision point blocks — suppresses nudges. */
 	needsHumanP?: number;
-	next: "continue" | "stop" | "escalate";
+	next: "continue" | "replan" | "stop" | "escalate";
 	confidence: number;
 	/** git diff --stat tail at decision time (evidence summary). */
 	diffStat?: string;
@@ -182,8 +185,14 @@ export interface GateRecord extends BaseRecord {
 	contextTokens?: number;
 	/** Turns in the settled run. */
 	turns: number;
-	/** An idle nudge was sent back into the session (continue/escalate). */
+	/** An idle nudge was sent back into the session (continue/replan/escalate). */
 	nudged: boolean;
+	/**
+	 * Nudges already sent for this task before this verdict. A record with
+	 * nudgesBefore > 0 is the OUTCOME of the previous nudge — the label
+	 * calibration joins on ("did the nudge move doneP / reach stop?").
+	 */
+	nudgesBefore: number;
 }
 
 export interface GuardRecord extends BaseRecord {

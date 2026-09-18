@@ -513,12 +513,16 @@ async function gateConsult(
 	files: string[],
 	offline: Map<string, string>,
 ): Promise<GateResult> {
+	// Whenever the approve node answered, its probability rides EVERY
+	// outcome (including user yes/no): the pair is a calibration label.
+	let approveP: number | undefined;
 	const take = (approval: Approval, chosenBy: ChosenBy): GateResult => ({
 		approved: true,
 		approval,
 		name: proposedName,
 		model: proposed,
 		chosenBy,
+		approveP,
 	});
 	if (proposed.autoApprove || cfg.approval?.consultTool === "auto") {
 		return take("auto", "auto");
@@ -526,12 +530,11 @@ async function gateConsult(
 
 	// Fabric approve node: confident yes skips the prompt; anything else
 	// (unsure, no judge, rate-capped) falls through to the ask dialog.
-	let approveP: number | undefined;
 	if (cfg.approval?.consultTool === "judge") {
 		approveP = await judgeApprove(cfg, proposedName, proposed, proposedBy, question, files, modelBaseUrl(ctx.model));
 		if (approveP !== undefined && approveP >= (cfg.approval?.approveThreshold ?? 0.85)) {
 			if (ctx.hasUI) ctx.ui.notify(`consult auto-approved by judge (p=${approveP.toFixed(2)}): ${modelLabel(proposed)}`, "info");
-			return { ...take("judge_auto", proposedBy), approveP };
+			return take("judge_auto", proposedBy);
 		}
 	}
 
@@ -593,6 +596,7 @@ async function gateConsult(
 			name,
 			model: pool[name],
 			chosenBy: name === proposedName ? proposedBy : "user_override",
+			approveP,
 		};
 	}
 	if (choice === "always") {
@@ -1037,6 +1041,7 @@ export default function advisor(pi: ExtensionAPI) {
 					files: params.files ?? [],
 					contextNote: params.context,
 					approval: "user_no",
+					approveP: gate.approveP,
 					proposedConsultant: resolved.name,
 					proposedConsultantModel: modelLabel(resolved.model),
 					chosenBy: proposedBy,

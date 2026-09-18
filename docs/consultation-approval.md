@@ -119,6 +119,12 @@ match the runtime payload. `question` stops at 600 characters;
 `noul` means “probability of true.” If it misses
 `approval.approveThreshold`, Pi asks you.
 
+When it asks you, your answer becomes a label. The node's probability is
+logged next to your yes/no, and `/calibration` shows the join: **a wide
+gap between "mean probability when you said yes" and "when you said no"
+means the node ranks well and the threshold can come down.** No gap
+means it can't tell — the threshold only buys silence.
+
 ---
 
 ## How do you set the rule?

@@ -9,7 +9,7 @@ final answer. One detector can't see all three.
 | --- | --- | --- |
 | Guards | One command or repeated tool call | Allow or block |
 | Watchdog | Recent turns and tool outcomes | Stay quiet, correct, or suggest a consult |
-| Outcome gate | Diff, checks, trace, and session stage | Continue, stop, escalate, or wait for you |
+| Outcome gate | Diff, checks, trace, and session stage | Continue, replan, stop, escalate, or wait for you |
 
 ## Is this call harmful or wasteful?
 
@@ -100,7 +100,9 @@ sequenceDiagram
     else Informational task
         J-->>P: Answer delivered — status only
     else Continue
-        J-->>P: Send one bounded nudge
+        J-->>P: Nudge: fix forward
+    else Replan
+        J-->>P: Nudge: revert, then re-approach
     else Stop
         J-->>P: Done or review status
     else Escalate
@@ -119,6 +121,21 @@ changes, missing tests, and decisions that belong to you.
 
 ---
 
+## What if the run made things worse?
+
+Recovery isn't binary. A failed run can be **almost right** (fix
+forward) or **actively wrong** (checks regressed from passing to failing
+while the diff kept growing). Patching on top of the second kind digs
+the hole deeper.
+
+That's why `replan` is its own verdict, not advice glued onto
+"continue". A replan nudge tells the worker: **revert to the last good
+state first, then re-approach fresh.** Research on coding-agent
+recovery backs the split — fix-forward, fresh-start, and escalate
+succeed on different failures, and no single default wins.
+
+---
+
 ## What if you only asked a question?
 
 Ask "what do you think about my repo?" and there's nothing to diff. An
@@ -133,6 +150,29 @@ gate never auto-nudges it into making changes.**
 One more trap is closed: a nudge arrives looking like a user message.
 Nudges and hints from extensions no longer re-anchor the task or refill
 the nudge budget. **`maxNudgesPerTask` is a real cap, not a suggestion.**
+
+---
+
+## How do you know the judge is right?
+
+The thresholds only work if the probabilities behind them mean
+something. Two things keep them honest.
+
+**Anchors instead of bare scores.** Small classifiers compare better
+than they scale, so the gate's questions carry worked examples: "'fix
+the failing test' + empty diff = not done". The judge matches against
+anchors instead of inventing an absolute scale each call.
+
+**`/calibration` shows the receipts.** Every nudge gets an outcome: the
+next verdict for the same task says whether it resolved, stalled, or
+never re-settled (`nudgesBefore` joins them). Every unsure approval gets
+one too: the approve node's probability sits next to what you then
+decided. The report bins these by confidence.
+
+**If high-confidence decisions don't succeed more often than
+low-confidence ones, the confidence is noise** — raise
+`judge.minConfidence` or stop trusting auto-approval. If they do, the
+thresholds can come down and the fabric earns more autonomy.
 
 ---
 
@@ -181,10 +221,11 @@ Pi's native tool approval remains the final permission boundary.
 | `guard` | Command, task, risk, blocked |
 | `tool_guard` | Tool, call, trigger, waste probability, blocked |
 | `watchdog` | Digest, tier, verdict, confidence |
-| `gate` | Task intent, done probability, route, diff stat, checks, review flags |
+| `gate` | Task intent, done probability, verdict (continue/replan/stop/escalate), diff stat, checks, review flags, nudges before |
 
 Implementation: `extensions/command-guard.ts`,
-`extensions/tool-guard.ts`, `extensions/watchdog.ts`, and
-`extensions/outcome-gate.ts`.
+`extensions/tool-guard.ts`, `extensions/watchdog.ts`,
+`extensions/outcome-gate.ts`, and `extensions/calibration.ts` (the
+`/calibration` report, analysis in `lib/calibration.ts`).
 
 Next: [see how every judgment degrades safely](decision-fabric.md).

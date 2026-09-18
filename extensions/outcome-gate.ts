@@ -8,20 +8,28 @@
 //                            |
 //                          judge
 //                            |
-//            continue      stop       escalate
-//               |                         |
-//        nudge local on        suggest frontier consult
+//        continue    replan      stop      escalate
+//           |           |                     |
+//      fix forward   revert +      suggest frontier consult
+//                   re-approach
 //
 // Evidence is gathered, never regenerated: `git diff` is read directly
 // (cheap), test/lint/build results are captured from tool outputs the
 // agent already produced — the gate never runs a test suite itself.
 //
 // One call, many parallel questions (System One answers them together):
-// wants_changes (intent anchor), done, next (continue/stop/escalate),
-// revert, plus review flags — regression_risk, scope_creep,
+// wants_changes (intent anchor), done, next (continue/replan/stop/
+// escalate), plus review flags — regression_risk, scope_creep,
 // architectural_change, needs_more_tests — and needs_human, a safety
 // override that suppresses nudges whenever a human decision point
 // blocks, whatever the router said.
+//
+// Recovery is not binary (fix forward vs give up): "replan" is a first-
+// class action — revert to the last good state and re-approach fresh —
+// because a run that regressed the tree is better undone than patched.
+// Questions carry contrastive ANCHORS (worked examples in the
+// instructions) instead of asking for bare absolute scores: small
+// classifiers compare far better than they scale.
 //
 // The verdict is anchored on the STARTING intent: `task` is the last
 // real user message (extension-injected nudges never re-anchor it), and
@@ -32,12 +40,13 @@
 // changes nobody asked for.
 //
 // Actions are conservative: "stop" and review flags only set a status
-// line ("looks done — regression risk 0.8"). "continue"/"escalate" send
-// at most gate.maxNudgesPerTask idle nudges per user task (a nudge
-// starts a new local run), and the consult approval gate still owns any
-// frontier spend. Every verdict is a GateRecord — task ->
-// done/route/flag labels for the flywheel. No judge configured = the
-// gate does nothing.
+// line ("looks done — regression risk 0.8"). "continue"/"replan"/
+// "escalate" send at most gate.maxNudgesPerTask idle nudges per user
+// task (a nudge starts a new local run), and the consult approval gate
+// still owns any frontier spend. Every verdict is a GateRecord — task ->
+// done/route/flag labels for the flywheel, with nudgesBefore joining a
+// nudge to the verdict that followed it (see /calibration). No judge
+// configured = the gate does nothing.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -48,7 +57,7 @@ import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, modelBaseUrl, noulOf, resolveJ
 
 const execFileAsync = promisify(execFile);
 
-const NEXT = ["continue", "stop", "escalate"] as const;
+const NEXT = ["continue", "replan", "stop", "escalate"] as const;
 type Next = (typeof NEXT)[number];
 
 /** Shell commands whose output counts as verification evidence. */
@@ -202,7 +211,7 @@ export default function outcomeGate(pi: ExtensionAPI) {
 				done: {
 					type: "noul",
 					instructions:
-						"The coding agent just stopped and implicitly claims `task` is handled. For an informational task, `answer` is the deliverable: a complete, on-point answer means done, and an empty diff is expected, not missing. For a change-requesting task, does the evidence (`git_changes`, `checks`, `trace`) show the change was made and verified? Only then does a missing diff or a failing check mean not done.",
+						"The coding agent just stopped and implicitly claims `task` is handled. For an informational task, `answer` is the deliverable: a complete, on-point answer means done, and an empty diff is expected, not missing. For a change-requesting task, does the evidence (`git_changes`, `checks`, `trace`) show the change was made and verified? Only then does a missing diff or a failing check mean not done. Anchors: 'what do you think of X?' + a substantive on-point answer + empty diff = done; 'fix the failing test' + empty diff = not done; 'add feature X' + a diff but the check exercising X failing = not done.",
 					criteria: {
 						true: "The deliverable exists — an on-point answer for informational tasks, or changes plus passing checks for change requests",
 						false: "The deliverable is missing — no real answer, missing changes where expected, failing checks, or a trace that stopped mid-way",
@@ -211,20 +220,12 @@ export default function outcomeGate(pi: ExtensionAPI) {
 				next: {
 					type: "choice",
 					instructions:
-						"Who should act next on `task`? Weigh `session_stage`: more local turns are cheap (warm cache) when the gap is small; escalation pays when the remaining gap looks beyond the local model.",
+						"Who should act next on `task`, and from which state? Weigh `session_stage`: more local turns are cheap (warm cache) when the gap is small; escalation pays when the remaining gap looks beyond the local model. Anchors: one concrete failing check with an evident fix = continue; `checks` regressed from passing to failing while the diff kept growing = replan; deliverable present and verified = stop; the trace shows repeated failed approaches at the same wall = escalate.",
 					criteria: {
-						continue: "Not finished, but the local model can close the gap — it should keep working now",
+						continue: "Not finished, but the current changes are progress — the local model should fix forward from here",
+						replan: "This run likely left the tree WORSE than it started — revert to the last good state first, then re-approach fresh",
 						stop: "Finished, or the next decision belongs to the user — no more automatic work",
 						escalate: "A frontier-class model should review or take over what remains",
-					},
-				},
-				revert: {
-					type: "noul",
-					instructions:
-						"Is the working tree likely in a WORSE state than before this run — e.g. `checks` regressed from passing to failing while the diff kept growing? If yes, reverting to the last good state and re-approaching beats forward-fixing on top of broken changes.",
-					criteria: {
-						true: "Evidence of digging deeper — revert first, then re-approach",
-						false: "Changes are progress (or there is no sign of regression) — keep them",
 					},
 				},
 				regression_risk: {
@@ -278,7 +279,6 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		if (!result || !next || !NEXT.includes(next.choice as Next)) return;
 		const wantsChangesP = noulOf(result, "wants_changes");
 		const doneP = noulOf(result, "done");
-		const revertP = noulOf(result, "revert");
 		const regressionP = noulOf(result, "regression_risk");
 		const scopeCreepP = noulOf(result, "scope_creep");
 		const archP = noulOf(result, "architectural_change");
@@ -301,6 +301,9 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		// they require the cheap local worker. Expensive main models still
 		// get the verdict — as a free status line.
 		const localWorker = isLocalWorker(ctx.model, cfg);
+		// Snapshot BEFORE any nudge: a record with nudgesBefore > 0 is the
+		// outcome of the previous nudge — the calibration label.
+		const nudgesBefore = nudgesThisTask;
 		let nudged = false;
 
 		// Intent anchor: an informational task ("what do you think", "can you
@@ -333,10 +336,6 @@ export default function outcomeGate(pi: ExtensionAPI) {
 			]
 				.filter(Boolean)
 				.join(" · ");
-			const revertAdvice =
-				revertP !== undefined && revertP >= FLAG_P
-					? ` The change history looks like digging deeper (revert probability ${revertP.toFixed(2)}) — consider reverting to the last good state (git stash or checkout) and re-approaching instead of fixing forward.`
-					: "";
 			const scopeAdvice =
 				scopeCreepP !== undefined && scopeCreepP >= FLAG_P
 					? ` The diff has drifted off-task (scope creep ${scopeCreepP.toFixed(2)}) — drop or revert the unrelated edits and keep only what the task needs.`
@@ -356,7 +355,9 @@ export default function outcomeGate(pi: ExtensionAPI) {
 				: "then verify the result before stopping";
 			let nudge: string | undefined;
 			if (next.choice === "continue") {
-				nudge = `[outcome-gate] The evidence says the requested change is not finished (${evidence || "see the last checks"}).${revertAdvice}${scopeAdvice}${testsAdvice} Continue: close the remaining gap on what the user asked for — nothing beyond it — ${verify}.`;
+				nudge = `[outcome-gate] The evidence says the requested change is not finished (${evidence || "see the last checks"}).${scopeAdvice}${testsAdvice} Continue: close the remaining gap on what the user asked for — nothing beyond it — ${verify}.`;
+			} else if (next.choice === "replan") {
+				nudge = `[outcome-gate] The evidence says this run left the working tree worse than it started (${evidence || "see the last checks"}).${scopeAdvice} Replan: first revert to the last good state (git stash, or git checkout the touched files), then re-approach the task fresh instead of fixing forward on top of broken changes — ${verify}.`;
 			} else {
 				const rescuer = resolveModel(cfg);
 				const name = "error" in rescuer ? undefined : rescuer.name;
@@ -387,7 +388,6 @@ export default function outcomeGate(pi: ExtensionAPI) {
 			task: lastUserMessage.slice(0, 300),
 			wantsChangesP,
 			doneP,
-			revertP,
 			regressionP,
 			scopeCreepP,
 			archP,
@@ -400,6 +400,7 @@ export default function outcomeGate(pi: ExtensionAPI) {
 			contextTokens: usage?.tokens ?? undefined,
 			turns: turnsSinceInput,
 			nudged,
+			nudgesBefore,
 		});
 	});
 }
