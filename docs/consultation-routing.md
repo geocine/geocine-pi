@@ -97,7 +97,7 @@ flowchart LR
   "questions": {
     "rescuer": {
       "type": "choice",
-      "instructions": "Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Match capability tags to the question — e.g. a question about an image or screenshot needs a vision-classed model. Avoid strict-guardrail models when the content looks likely to trigger a refusal — NSFW/adult/sexual content (including image captions), or blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Ordinary reverse engineering (decompile/disassemble to understand a binary, defensive analysis) stays on aligned models. Prefer an abliterated-class one only for the refusal cases; among those, prefer one also classed local over a hosted abliterated fallback. When several fit equally, prefer the lower `rank` (1 = first choice).",
+      "instructions": "Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Match capability tags to the question — e.g. a question about an image or screenshot needs a vision-classed model. Avoid strict-guardrail models when the content looks likely to trigger a refusal — NSFW/adult/sexual content (including image captions), or blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Ordinary reverse engineering (decompile/disassemble to understand a binary, defensive analysis) stays on aligned models. Prefer an abliterated-class one only for the refusal cases; among those, prefer one also classed local over a hosted abliterated fallback. Weigh `history` when present — it is how past consults from this user actually went: prefer models the user picked over a proposal for similar tasks (`overridden_to`, `recent_user_choices`), avoid ones that refused, were overridden away, or were denied for similar work; counts under `same_worker` happened with the same `worker` model active as now and weigh more than the overall counts. When several fit equally, prefer the lower `rank` (1 = first choice).",
       "criteria": {
         "qwen-27b": "local coding and research",
         "grok-4.6": "hard debugging and planning"
@@ -132,6 +132,48 @@ characters; `context` stops at 400.
 
 TypeSafe returns the whole distribution. The choice must still exist in
 the available pool and meet `judge.minConfidence`.
+
+---
+
+## How does routing learn from you?
+
+The consult-log already records how every past consult went: user
+overrides (proposed X, you picked Y), outright denials, and refusals. And
+every record names the *worker* that was active at the time — because
+preference is conditional: the rescuer you want under a 27B local worker
+is not the one you want under a frontier main model.
+
+`lib/route-history.ts` aggregates the recent months of that log and the
+route node receives it as a `history` state field:
+
+```jsonc
+"history": {
+  "worker": "llama.cpp/owner/qwen",           // active worker now
+  "models": {
+    "grok-4.6": {
+      "consults": 12, "refused": 1,
+      "overridden_away": 2, "overridden_to": 0, "denied": 1,
+      "same_worker": { "consults": 8, "refused": 1, "overridden_away": 2, "overridden_to": 0, "denied": 0 }
+    }
+  },
+  "recent_user_choices": [
+    { "task": "summarize this pdf structure", "proposed": "xai/grok-4.6",
+      "action": "override", "chose": "meta/muse-spark-1.3-contributor",
+      "worker": "llama.cpp/owner/qwen" }
+  ]
+}
+```
+
+The judge does the generalizing — there is no hand-written task taxonomy.
+`same_worker` counts are the ones from sessions with the same worker base
+as now, and the instruction tells the judge those weigh more. Records are
+aggregated by stable `provider/model` identity (registry keys are just
+labels and get renamed), so history survives config renames and stale
+entries age out. `/models` shows each consultant's remembered outcomes.
+
+Same data, two horizons: this in-context loop makes today's routing
+reflect last week's outcomes; the judge trace (`judge-YYYY-MM.jsonl`)
+remains the offline dataset for eventually training your own routing head.
 
 ---
 

@@ -78,6 +78,13 @@ export interface ConsultRequestRecord extends BaseRecord {
 	jailBy?: "static" | "lease" | "abliterated_target" | "judge" | "failsafe";
 	/** Jail node's sensitive-content probability, when it was consulted. */
 	jailSensitiveP?: number;
+	/**
+	 * Stable identity (provider/model) of the consultant and the proposal.
+	 * Registry keys are just labels and get renamed; route-history keys
+	 * outcome aggregation on these so history survives a rename.
+	 */
+	consultantModel?: string;
+	proposedConsultantModel?: string;
 }
 
 export interface StagedFile {
@@ -112,6 +119,8 @@ export interface PrescreenRecord extends BaseRecord {
 export interface ConsultResultRecord extends BaseRecord {
 	type: "consult_result";
 	consultant: string;
+	/** Stable identity (provider/model) — see ConsultRequestRecord. */
+	consultantModel?: string;
 	jail: "staged" | "none";
 	exitCode: number;
 	refusalSuspected: boolean;

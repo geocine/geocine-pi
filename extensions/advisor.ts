@@ -45,6 +45,7 @@ import {
 import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, type JudgeQuestion, modelBaseUrl, noulOf, scoreOf } from "../lib/judge/index.ts";
 import { looksLikeRefusal, runPi, type PiProgress, type PiRunResult } from "../lib/pi-exec.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
+import { historySummary, routeHistoryState } from "../lib/route-history.ts";
 import { taskIsRefusalSensitive } from "./triage.ts";
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
@@ -388,6 +389,7 @@ async function routeModel(
 	question: string,
 	contextNote: string | undefined,
 	files: string[],
+	worker: string | undefined,
 	workerBaseUrl: string | undefined,
 ): Promise<string | undefined> {
 	const names = Object.keys(pool);
@@ -397,11 +399,15 @@ async function routeModel(
 	// unclassed entries.
 	const isCheap = (c: ModelConfig) =>
 		c.classes?.includes("cheap") || c.classes?.includes("local") || locals.includes(c.provider ?? "");
+	// Routing memory: past outcomes per consultant (refusals, overrides,
+	// denials) with a same-worker projection — see lib/route-history.ts.
+	const history = routeHistoryState(cfg, pool, worker);
 	const result = await judge(cfg.judge, {
 		state: {
 			question: question.slice(0, 1200),
 			context: contextNote?.slice(0, 400) ?? "(none)",
 			files,
+			...(history ? { history } : {}),
 			models: Object.fromEntries(
 				Object.entries(pool).map(([n, c]) => [
 					n,
@@ -422,7 +428,7 @@ async function routeModel(
 			rescuer: {
 				type: "choice",
 				instructions:
-					"Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Match capability tags to the question — e.g. a question about an image or screenshot needs a vision-classed model. Avoid strict-guardrail models when the content looks likely to trigger a refusal — NSFW/adult/sexual content (including image captions), or blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Ordinary reverse engineering (decompile/disassemble to understand a binary, defensive analysis) stays on aligned models. Prefer an abliterated-class one only for the refusal cases; among those, prefer one also classed local over a hosted abliterated fallback. When several fit equally, prefer the lower `rank` (1 = first choice).",
+					"Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Match capability tags to the question — e.g. a question about an image or screenshot needs a vision-classed model. Avoid strict-guardrail models when the content looks likely to trigger a refusal — NSFW/adult/sexual content (including image captions), or blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Ordinary reverse engineering (decompile/disassemble to understand a binary, defensive analysis) stays on aligned models. Prefer an abliterated-class one only for the refusal cases; among those, prefer one also classed local over a hosted abliterated fallback. Weigh `history` when present — it is how past consults from this user actually went: prefer models the user picked over a proposal for similar tasks (`overridden_to`, `recent_user_choices`), avoid ones that refused, were overridden away, or were denied for similar work; counts under `same_worker` happened with the same `worker` model active as now and weigh more than the overall counts. When several fit equally, prefer the lower `rank` (1 = first choice).",
 				criteria: Object.fromEntries(names.map((n) => [n, pool[n].role ?? null])),
 			},
 		},
@@ -705,7 +711,13 @@ async function consult(
 	signal: AbortSignal | undefined,
 	notify: (msg: string) => void,
 	approval: Approval,
-	routing?: { proposedConsultant?: string; chosenBy?: ChosenBy; approveP?: number; offline?: Map<string, string> },
+	routing?: {
+		proposedConsultant?: string;
+		proposedConsultantModel?: string;
+		chosenBy?: ChosenBy;
+		approveP?: number;
+		offline?: Map<string, string>;
+	},
 	onProgress?: (progress: PiProgress) => void,
 ): Promise<ConsultOutcome> {
 	const dir = logDir(cfg);
@@ -728,12 +740,14 @@ async function consult(
 		contextNote,
 		approval,
 		proposedConsultant: routing?.proposedConsultant,
+		proposedConsultantModel: routing?.proposedConsultantModel,
 		approveP: routing?.approveP,
 		chosenBy: routing?.chosenBy,
 		offlineExcluded: routing?.offline?.size ? Object.fromEntries(routing.offline) : undefined,
 		jail,
 		jailBy: decision.by,
 		jailSensitiveP: decision.sensitiveP,
+		consultantModel: modelLabel(model),
 	});
 
 	// 1. Stage (context firewall) unless running in place.
@@ -863,6 +877,7 @@ async function consult(
 		...base,
 		ts: nowIso(),
 		consultant: modelName,
+		consultantModel: modelLabel(model),
 		jail,
 		exitCode: result.exitCode,
 		refusalSuspected: refused,
@@ -969,7 +984,7 @@ export default function advisor(pi: ExtensionAPI) {
 			let proposedBy: "model" | "default" | "judge" = params.model ? "model" : "default";
 			let wanted = params.model;
 			if (!wanted) {
-				const routed = await routeModel(cfg, available, params.question, params.context, params.files ?? [], modelBaseUrl(ctx.model));
+				const routed = await routeModel(cfg, available, params.question, params.context, params.files ?? [], mainModelId(ctx), modelBaseUrl(ctx.model));
 				if (routed) {
 					wanted = routed;
 					proposedBy = "judge";
@@ -1016,12 +1031,14 @@ export default function advisor(pi: ExtensionAPI) {
 					cwd: ctx.cwd,
 					mainModel: mainModelId(ctx),
 					consultant: resolved.name,
+					consultantModel: modelLabel(resolved.model),
 					source: "tool",
 					question: params.question,
 					files: params.files ?? [],
 					contextNote: params.context,
 					approval: "user_no",
 					proposedConsultant: resolved.name,
+					proposedConsultantModel: modelLabel(resolved.model),
 					chosenBy: proposedBy,
 					offlineExcluded: offline.size ? Object.fromEntries(offline) : undefined,
 				});
@@ -1069,7 +1086,13 @@ export default function advisor(pi: ExtensionAPI) {
 				signal,
 				(msg) => ctx.ui.setStatus("advisor", msg),
 				gate.approval,
-				{ proposedConsultant: resolved.name, chosenBy: gate.chosenBy, approveP: gate.approveP, offline },
+				{
+					proposedConsultant: resolved.name,
+					proposedConsultantModel: modelLabel(resolved.model),
+					chosenBy: gate.chosenBy,
+					approveP: gate.approveP,
+					offline,
+				},
 				streamProgress,
 			);
 			ctx.ui.setStatus("advisor", undefined);
@@ -1185,7 +1208,9 @@ export default function advisor(pi: ExtensionAPI) {
 					.filter(Boolean)
 					.join(", ");
 				const off = offline.has(name) ? ` — OFFLINE: ${offline.get(name)}` : "";
-				return `${modelLabel(c)} {${c.classes?.join(", ") || "unclassed"}} (${flags})${c.role ? ` — ${c.role}` : ""}${off}`;
+				// What the router remembers about this consultant (route-history).
+				const hist = historySummary(cfg, name);
+				return `${modelLabel(c)} {${c.classes?.join(", ") || "unclassed"}} (${flags})${c.role ? ` — ${c.role}` : ""}${off}${hist ? `\n  history: ${hist}` : ""}`;
 			});
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
