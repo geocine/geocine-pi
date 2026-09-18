@@ -15,6 +15,7 @@ import { deepseekHarness } from "./deepseek.ts";
 import { grokHarness } from "./grok.ts";
 import { openaiHarness } from "./openai.ts";
 import { qwenHarness } from "./qwen.ts";
+import { registerRenderShims } from "./render-shims.ts";
 import { registerTodoTool, rehydrateTodos } from "./todo.ts";
 import type { ModelHarness } from "./types.ts";
 import { registerWebTools } from "./web.ts";
@@ -23,8 +24,13 @@ const HARNESSES: ModelHarness[] = [qwenHarness, grokHarness, openaiHarness, deep
 
 const STATUS_ID = "model-harness";
 
+// Last harness resolved for the running session; render shims read it to pick
+// the right dialect conversion when several harnesses share an advertised name.
+let lastActiveHarness: ModelHarness | undefined;
+
 function activeHarness(ctx: ExtensionContext | undefined): ModelHarness | undefined {
-	return HARNESSES.find((h) => h.matches(ctx));
+	lastActiveHarness = HARNESSES.find((h) => h.matches(ctx));
+	return lastActiveHarness;
 }
 
 function refreshStatus(ctx: ExtensionContext): void {
@@ -98,6 +104,10 @@ export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 	// OpenAI models).
 	registerTodoTool(pi);
 	registerWebTools(pi);
+	// Rendering-only shims for advertised dialect names, so streamed aliased
+	// calls draw proper headers instead of the generic raw-JSON block. Never
+	// sent to any model: stripped from every payload below.
+	const renderShimNames = registerRenderShims(pi, HARNESSES, () => lastActiveHarness);
 
 	pi.registerCommand("harness", {
 		description: "Model harnesses: no arg lists them; /harness [id] <args> routes to a harness (e.g. /harness auto)",
@@ -168,7 +178,9 @@ export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 	pi.on("before_provider_request", (event, ctx) => {
 		const harness = activeHarness(ctx);
 		let payload = event.payload;
-		const stripped = removeToolsFromPayload(payload, foreignOwnedTools(harness));
+		const strippedNames = foreignOwnedTools(harness);
+		for (const name of renderShimNames) strippedNames.add(name);
+		const stripped = removeToolsFromPayload(payload, strippedNames);
 		if (stripped) payload = stripped;
 		if (!harness) return stripped;
 		// Outbound aliasing next, so harness payload patches (e.g. qwen's

@@ -48,6 +48,22 @@ The shared todo state survives model changes and compaction.
 
 ---
 
+## Why do aliased calls still render nicely in the TUI?
+
+Pi's TUI builds each tool-call block from the *streamed* name — the
+advertised dialect name — before the canonical restore at message end.
+An unregistered name would fall back to a bold title over raw JSON args.
+
+`render-shims.ts` closes that gap: every advertised name that differs
+from its canonical tool is registered as a rendering-only shim whose
+`renderCall` converts the dialect args back to canonical and draws the
+canonical header (`$ <command>`, `read <path>`, ...). The shims are
+stripped from every provider payload, so no model ever sees them as
+callable tools, and live calls are restored to canonical before Pi
+resolves a tool, so a shim never executes.
+
+---
+
 ## What happens to web and PDF calls?
 
 ```mermaid
