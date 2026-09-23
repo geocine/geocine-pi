@@ -169,8 +169,9 @@ The judge does the generalizing — there is no hand-written task taxonomy.
 `same_worker` counts are the ones from sessions with the same worker base
 as now, and the instruction tells the judge those weigh more. Records are
 aggregated by stable `provider/model` identity (registry keys are just
-labels and get renamed), so history survives config renames and stale
-entries age out. `/models` shows each consultant's remembered outcomes —
+labels and get renamed), so history survives config renames. Models you
+remove from the registry drop out of routing. Counts don't decay: they
+stay in the snapshot until `/calibration reset`. `/models` shows each consultant's remembered outcomes —
 and marks the ones still unexplored ("none yet — eligible for low-stakes
 exploration").
 
@@ -231,7 +232,7 @@ Pi health-checks `llama.cpp` entries. It assumes cloud entries are
 reachable because probing them would spend credentials or quota.
 
 An explicit offline target stops with its reason. **Routing never swaps
-your explicit choice behind your back.**
+the consultant you named behind your back.**
 
 The request log keeps the proposal, final model, selection source,
 confidence, and availability exclusions.

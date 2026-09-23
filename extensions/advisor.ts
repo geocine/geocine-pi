@@ -42,7 +42,7 @@ import {
 	nowIso,
 	type StagedFile,
 } from "../lib/consult-log.ts";
-import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, type JudgeQuestion, modelBaseUrl, noulOf, scoreOf } from "../lib/judge/index.ts";
+import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, type JudgeQuestion, modelBaseUrl, noulOf, sameOrigin, scoreOf } from "../lib/judge/index.ts";
 import { looksLikeRefusal, runPi, type PiProgress, type PiRunResult } from "../lib/pi-exec.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
 import { historySummary, routeHistoryState } from "../lib/route-history.ts";
@@ -306,6 +306,23 @@ async function prescreen(
 			raw: `prescreen model "${resolved.name}" offline: ${offlineReason}`,
 			elapsedMs: 0,
 			screener: `offline:${resolved.name}`,
+		};
+	}
+	// Same rule as the judge fallback tier: a side request on the worker's
+	// single-slot server evicts its KV cache.
+	let screenerBaseUrl: string | undefined;
+	try {
+		screenerBaseUrl = resolved.model.provider ? registry?.find(resolved.model.provider, resolved.model.model)?.baseUrl : undefined;
+	} catch {
+		screenerBaseUrl = undefined;
+	}
+	if (sameOrigin(screenerBaseUrl, workerBaseUrl)) {
+		return {
+			risk: "unknown",
+			triggers: [],
+			raw: `prescreen model "${resolved.name}" shares the worker's server (${screenerBaseUrl}); skipped to keep its cache warm`,
+			elapsedMs: 0,
+			screener: `skipped:${resolved.name}`,
 		};
 	}
 	const excerpts = files.map((f) => `=== ${f.file} ===\n${f.content}`);
@@ -637,11 +654,11 @@ interface JailDecision {
  * Effective jail for one consult. Static "staged"/"none" stand as written
  * (absent = "staged"). "auto" resolves per consult, and the judge may only
  * ever LOOSEN the boundary — every uncertain path lands on "staged":
- *  1. a refusal-sensitive session (active abliterated lease or a
+ *  1. an abliterated-class target is the model such work is FOR — it runs
+ *     live, same as a static "none", even in a refusal-sensitive session;
+ *  2. a refusal-sensitive session (active abliterated lease or a
  *     refusal-high task) stages deterministically — an aligned consultant
  *     must not see the live workspace of policy-sensitive work;
- *  2. an abliterated-class target is the model such work is FOR — it runs
- *     live, same as a static "none";
  *  3. everything else asks the fabric's jail node whether the consult
  *     carries content that should only leave in bounded excerpts;
  *     confidently bland (calibrated tier only — the naive-llm fallback may
@@ -657,8 +674,8 @@ async function resolveJail(
 ): Promise<JailDecision> {
 	const configured = model.jail ?? "staged";
 	if (configured !== "auto") return { jail: configured, by: "static" };
-	if (taskIsRefusalSensitive()) return { jail: "staged", by: "lease" };
 	if (model.classes?.includes("abliterated")) return { jail: "none", by: "abliterated_target" };
+	if (taskIsRefusalSensitive()) return { jail: "staged", by: "lease" };
 	const result = await judge(
 		cfg.judge,
 		{
@@ -675,7 +692,7 @@ async function resolveJail(
 				sensitive: {
 					type: "noul",
 					instructions:
-						"The local worker wants to consult `consultant`, a strict aligned cloud model. Decide the isolation boundary: must the consultant see ONLY explicitly staged excerpts (true), or is it safe to run it in the live workspace (false)? True when `question` or `files` suggest policy-sensitive, adult/NSFW, offensive-security, secret-bearing, or otherwise refusal-prone or private content. False when this is clearly ordinary software work — coding, debugging, planning, research.",
+						"The worker wants to consult `consultant`, a safety-aligned model. Decide the isolation boundary: must the consultant see ONLY explicitly staged excerpts (true), or is it safe to run it in the live workspace (false)? True when `question` or `files` suggest policy-sensitive, adult/NSFW, offensive-security, secret-bearing, or otherwise refusal-prone or private content. False when this is clearly ordinary software work — coding, debugging, planning, research.",
 					criteria: {
 						true: "Sensitive or doubtful — expose only the staged excerpts",
 						false: "Clearly ordinary software work — the live workspace is safe to read",

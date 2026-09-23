@@ -73,6 +73,9 @@ sequenceDiagram
 
 **A model hop changes who runs the turn. It doesn't hand over ownership.**
 
+Pi hops on its own only when a cheap worker meets refusal-sensitive work.
+It never swaps a model you picked on purpose without asking.
+
 ---
 
 ## How do you run it?

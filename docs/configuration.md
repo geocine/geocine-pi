@@ -56,10 +56,14 @@ win, and most settings reload on each event.
 | Class | Runtime meaning |
 | --- | --- |
 | `default` | No-target consultation fallback |
-| `local` | Cheap-worker behavior, context keeper, and local-first permissive routing |
-| `cheap` | Cheap-worker steering and guards |
+| `local` | Served locally: context keeper, local-first permissive routing, and cheap-worker steering |
+| `cheap` | Price tier: routing prefers it, and it arms cheap-worker steering |
 | `abliterated` | Permissive routing candidate |
-| `frontier` | Strong consultation target |
+| `frontier` | Strong consultation target; never steered, even when also `cheap` |
+
+Cheap-worker steering means triage, escalation hints, gate nudges, the
+tool guard, and automatic refusal hops. It arms for `cheap` or `local`
+workers unless they are also `frontier`.
 | `fast`, `intelligent`, `vision` | Addressable capabilities |
 
 You can use any class as a handle, such as `/consult @vision`.
@@ -77,7 +81,7 @@ Flow: [consult routing](consultation-routing.md),
 | --- | --- | --- |
 | `approval.consultTool` | `ask` | Uses `ask`, `judge`, or `auto` for worker tool calls |
 | `approval.approveThreshold` | `0.85` | Probability needed to skip your prompt |
-| `prescreen.model` | none | Registry model used as local screener |
+| `prescreen.model` | none | Registry model used as local screener; skipped while it shares the worker's server |
 | `prescreen.maxBytes` | `24576` | Maximum staged bytes screened |
 
 Your `/consult` command is direct intent, so it bypasses approval.
@@ -91,11 +95,11 @@ Flow: [approval](consultation-approval.md) and
 
 | Setting | Default | What it changes |
 | --- | --- | --- |
-| `triage.enabled` | `true` | Enables task-start and lease judgments |
-| `triage.escalateThreshold` | `0.75` | Probability needed for a mid-task consult suggestion |
-| `triage.cooldownTurns` | `8` | Turns between suggestions |
+| `triage.enabled` | `true` | Enables task-start routing and lease judgments |
 
-Triage stays silent when no judge is configured.
+Without a judge, triage doesn't route, and an open lease always dwells.
+With `triage.enabled: false`, a lease opened by the outcome gate still
+gets its dwell or return decisions.
 
 Flow: [triage and model leases](triage.md).
 
@@ -113,6 +117,8 @@ Flow: [triage and model leases](triage.md).
 | `watchdog.hintCooldownTurns` | `4` | Turns between hints |
 | `watchdog.loopThreshold` | `3` | Same calls that count as a loop |
 | `watchdog.failStreakThreshold` | `3` | Failed commands that count as stuck |
+| `watchdog.escalateThreshold` | `0.75` | Probability needed for a mid-task consult suggestion |
+| `watchdog.escalateCooldownTurns` | `8` | Turns between escalation suggestions |
 | `watchdog.baseUrl` | none | Separate OpenAI-compatible endpoint |
 | `watchdog.model` | none | Model on that endpoint |
 | `watchdog.apiKeyEnv` | none | Environment variable holding its key |
@@ -124,7 +130,7 @@ Don't point `watchdog.baseUrl` at the active one-slot worker server.
 | Setting | Default | What it changes |
 | --- | --- | --- |
 | `gate.enabled` | `true` | Verifies work when the agent settles |
-| `gate.maxNudgesPerTask` | `1` | Caps automatic continuations |
+| `gate.maxNudgesPerTask` | `1` | Caps automatic continuations (cheap workers only) |
 | `gate.maxDiffChars` | `8000` | Caps diff evidence sent |
 
 ### Command guard
@@ -138,7 +144,7 @@ Don't point `watchdog.baseUrl` at the active one-slot worker server.
 
 | Setting | Default | What it changes |
 | --- | --- | --- |
-| `toolGuard.enabled` | `true` | Judges repeated calls from cheap workers |
+| `toolGuard.enabled` | `true` | Judges repeated calls from cheap, non-frontier workers |
 | `toolGuard.blockThreshold` | `0.8` | Waste probability needed to block |
 | `toolGuard.maxBlocksPerTask` | `3` | Caps interventions in one task |
 
@@ -226,12 +232,12 @@ Flow: [model harness and tools](model-tools.md).
 | Setting | Default | What it changes |
 | --- | --- | --- |
 | `rescue.enabled` | `true` | Captures manual cheap-to-frontier rescues |
-| `rescue.localProviders` | `["llama.cpp", "lmstudio", "ollama", "abliteration-ai"]` | Cheap-worker fallback for unregistered models |
+| `rescue.localProviders` | `["llama.cpp", "lmstudio", "ollama", "abliteration-ai"]` | Budget providers, local or hosted; cheap-worker fallback for unregistered models |
 | `rescue.distillModel` | pre-screen model | Registry model used by `/distill` |
 | `logDir` | `~/.pi/agent/consult-log` | Decision and judge-trace directory |
 
-Registered models use their `cheap` and `local` classes. The provider
-list only covers unregistered models.
+Registered models use their `cheap`, `local`, and `frontier` classes.
+The provider list only covers unregistered models.
 
 Flow: [training data](training-data.md).
 

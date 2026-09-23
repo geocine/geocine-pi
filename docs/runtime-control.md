@@ -9,7 +9,7 @@ final answer. One detector can't see all three.
 | --- | --- | --- |
 | Guards | One command or repeated tool call | Allow or block |
 | Watchdog | Recent turns and tool outcomes | Stay quiet, correct, or suggest a consult |
-| Outcome gate | Diff, checks, trace, final answer, and session stage | Continue, replan, stop, escalate, wait for you, or offer a hop after a refusal |
+| Outcome gate | Diff, checks, trace, final answer, and session stage | Continue, replan, stop (done or waiting for you), escalate, or hop after a refusal |
 
 ## Is this call harmful or wasteful?
 
@@ -116,6 +116,9 @@ sequenceDiagram
 The gate reads evidence the worker already produced. It doesn't run tests
 or builds.
 
+Nudges start a new run, so only cheap workers get them. A frontier or
+other non-cheap worker sees the verdict as a status line.
+
 Its parallel checks look for regressions, scope creep, architecture
 changes, missing tests, and decisions that belong to you.
 
@@ -171,20 +174,27 @@ sequenceDiagram
     W-->>G: Agent settled
     G->>J: refused? (alone if no tools ran, else with the gate questions)
     alt Refused, p >= 0.7 (or phrase match if no answer)
-        G->>U: Hop to an abliterated model and retry?
-        alt Approve
-            U-->>T: Open the hop lease
+        alt Cheap worker
+            G->>T: Open the hop lease
             T-->>W: Same task, abliterated model
-        else Decline
-            G-->>U: Status only
+        else Worker you picked on purpose
+            G->>U: Hop to an abliterated model and retry?
+            alt Approve
+                U-->>T: Open the hop lease
+                T-->>W: Same task, abliterated model
+            else Decline or headless
+                G-->>U: Status only
+            end
         end
     else Not a refusal
         G->>G: Normal verdict flow
     end
 ```
 
-**A refusal never gets a nudge.** It gets one approval prompt per task.
-The hop reuses triage's lease, so later turns dwell or return as usual.
+**A refusal never gets a nudge.** It gets at most one hop per task, under
+the same rule as triage's predicted hop: cheap workers hop automatically,
+while any other worker is asked first. The hop reuses triage's lease, so
+later turns dwell or return as usual, even with `triage.enabled: false`.
 
 `refused` counts safety, ethics, or policy refusals, including partial
 ones ("I'll write the parser but not the bypass"). "I couldn't find the
@@ -255,7 +265,9 @@ logs stay untouched as evidence.
     "sendHints": true,
     "hintCooldownTurns": 4,
     "loopThreshold": 3,
-    "failStreakThreshold": 3
+    "failStreakThreshold": 3,
+    "escalateThreshold": 0.75,
+    "escalateCooldownTurns": 8
   },
   "guard": {
     "enabled": true,

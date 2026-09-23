@@ -180,8 +180,8 @@ export interface GateRecord extends BaseRecord {
 	refusedP?: number;
 	/** Refusal came from the phrase heuristic because no judge tier answered. */
 	refusedHeuristic?: boolean;
-	/** Refusal prompt outcome: the user accepted the hop, declined it, or it could not hop. */
-	refusalHop?: "accepted" | "declined" | "unavailable";
+	/** Refusal hop outcome: automatic (cheap worker), the user accepted or declined it, or it could not hop. */
+	refusalHop?: "auto" | "accepted" | "declined" | "unavailable";
 	/** Absent on refusal-only records (tool-less settles). */
 	next?: "continue" | "replan" | "stop" | "escalate";
 	confidence?: number;

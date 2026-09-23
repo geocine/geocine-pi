@@ -20,8 +20,9 @@
 //    and refuse to consult it away. The approval gate still owns frontier
 //    spend.
 //
-// No judge configured (or triage.enabled false) = this extension does
-// nothing. The mid-task counterpart — the escalate-now probability — rides
+// No judge configured = an open lease always dwells. triage.enabled false
+// = no new routing, but a lease opened by the outcome gate still gets its
+// dwell/return decisions. The mid-task counterpart — the escalate-now probability — rides
 // the watchdog's every-turn judge call, not this file.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -140,8 +141,10 @@ export default function triage(pi: ExtensionAPI) {
 		if (ev.source === "extension") return;
 		if (ev.streamingBehavior === "steer" || ev.streamingBehavior === "followUp") return;
 		const cfg = loadConfig(ctx.cwd);
-		if (cfg.triage?.enabled === false) return;
 		let hop = currentHop(ctx.model);
+		// The outcome gate opens leases too; with triage off, only the lease's
+		// dwell/return decision still runs, so the session can find its way back.
+		if (cfg.triage?.enabled === false && !hop) return;
 		if (activeHop && !hop) {
 			activeHop = undefined;
 			lastRefusalHigh = false;
@@ -410,6 +413,7 @@ async function runTriage(
 	// Do not steer a strict worker toward frontier/plan_first on a task
 	// it will refuse — and do not steer frontier (also strict) after a hop.
 	if (
+		cfg.triage?.enabled !== false &&
 		!lastRefusalHigh &&
 		!switchedTo &&
 		route &&

@@ -14,7 +14,9 @@
 // aggregated by their stable `consultantModel` (provider/model) when
 // present, falling back to the key for legacy rows; at projection time
 // either identity resolves to the CURRENT registry entry, so history
-// survives a rename and stale keys age out naturally.
+// survives a rename and keys for removed models drop out of routing.
+// Counts do not decay: once folded into the snapshot they persist until
+// /calibration reset.
 //
 // Memory has two layers: the portable calibration snapshot
 // (calibration-snapshot.ts) is the long-term baseline — everything folded

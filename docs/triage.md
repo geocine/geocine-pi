@@ -118,26 +118,41 @@ fallbacks.
 
 ---
 
+## Why doesn't the hop ask first?
+
+Triage only routes cheap workers. A cheap worker is a budget pick, so
+swapping it for a permissive model of the same class doesn't override a
+deliberate choice. **Cheap workers hop without a prompt; any other worker
+is asked first.**
+
+The outcome gate follows the same rule when a refusal slips through: a
+cheap worker hops and retries automatically; a model you picked on purpose
+gets an approval prompt, and headless runs don't hop it at all. See
+[the refusal flow](runtime-control.md#what-if-the-worker-refuses).
+
+---
+
 ## How do you tune it?
 
 ```jsonc
 {
   "triage": {
-    "enabled": true,
-    "escalateThreshold": 0.75,
-    "cooldownTurns": 8
+    "enabled": true
   }
 }
 ```
 
 | Setting | What it changes |
 | --- | --- |
-| `triage.enabled` | Task-start and lease judgments |
-| `triage.escalateThreshold` | Confidence needed for a mid-task consult suggestion |
-| `triage.cooldownTurns` | Turns between suggestions |
+| `triage.enabled` | Task-start routing and lease judgments |
 | class `abliterated` | Marks a permissive candidate |
 | class `local` | Moves that candidate ahead of hosted ones |
 | model `rank` | Breaks ties inside each group |
+
+`triage.enabled: false` stops new routing. A lease the outcome gate opened
+still gets dwell or return decisions, so the session can find its way
+back. Mid-task consult suggestions belong to the watchdog
+(`watchdog.escalateThreshold`).
 
 ---
 

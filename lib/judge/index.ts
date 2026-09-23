@@ -159,6 +159,13 @@ function originKey(raw: string): string | undefined {
 	}
 }
 
+/** True when both URLs name the same server (loopback aliases count). */
+export function sameOrigin(a: string | undefined, b: string | undefined): boolean {
+	if (!a || !b) return false;
+	const ka = originKey(a);
+	return ka !== undefined && ka === originKey(b);
+}
+
 /**
  * The naive-llm fallback tier from judge.fallback, if configured — with
  * the same-origin guard: the tier is dropped when its server is the one
@@ -171,11 +178,7 @@ function originKey(raw: string): string | undefined {
 function fallbackTier(settings: JudgeSettings, workerBaseUrl?: string): Tier | undefined {
 	const fb = settings.fallback;
 	if (!fb?.baseUrl) return undefined;
-	if (workerBaseUrl) {
-		const a = originKey(fb.baseUrl);
-		const b = originKey(workerBaseUrl);
-		if (a !== undefined && a === b) return undefined;
-	}
+	if (sameOrigin(fb.baseUrl, workerBaseUrl)) return undefined;
 	return {
 		backend: naiveLlmJudge,
 		settings: { ...settings, baseUrl: fb.baseUrl, model: fb.model, apiKeyEnv: fb.apiKeyEnv, maxTokens: fb.maxTokens },

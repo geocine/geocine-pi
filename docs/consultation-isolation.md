@@ -85,11 +85,12 @@ the live workspace.
 
 `jail: "auto"` encodes exactly that, resolved per consult:
 
-1. **Refusal-sensitive session** (an active abliterated lease, or the last
+1. **Abliterated-class target** → `none`, even in a refusal-sensitive
+   session. It is the model such work is for; there is nothing to shield
+   it from.
+2. **Refusal-sensitive session** (an active abliterated lease, or the last
    task scored refusal-high) → `staged`, deterministically. No judge call —
    triage already knows.
-2. **Abliterated-class target** → `none`. It is the model such work is
-   for; there is nothing to shield it from.
 3. **Everything else** → the fabric's `jail` node scores the question and
    file names for sensitive content. Confidently bland → `none` (the live
    workspace is more useful to the consultant). Sensitive, unsure, an
@@ -126,7 +127,7 @@ It returns one advisory note. It never inherits the main tool loop.
     "reviewer": {
       "provider": "xai",
       "model": "grok-4.6",
-      "jail": "staged",
+      "jail": "auto",
       "thinking": "high",
       "notes": "Focus on correctness and scope."
     }
@@ -134,8 +135,14 @@ It returns one advisory note. It never inherits the main tool loop.
 }
 ```
 
-Keep `staged` unless you want the consultant to inspect the wider
-workspace.
+| Consultant | Pick |
+| --- | --- |
+| Aligned cloud model | `auto`: live for ordinary work, staged when it matters |
+| Abliterated or local model | `none` |
+| Must never see more than you name | `staged` |
+
+An unset `jail` means `staged`, the safe default for a model you haven't
+classified yet.
 
 The log keeps requested paths, copied paths, line ranges, bytes, errors,
 actual reads, and blocked escapes.

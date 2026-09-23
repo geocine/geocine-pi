@@ -4,7 +4,8 @@ Not every decision deserves another chat turn. The decision fabric asks
 small typed questions before Pi spends tokens, changes context, blocks a
 call, or switches models.
 
-**TypeSafe answers first. Every node still has a deterministic way out.**
+**TypeSafe answers first. Without an answer, every node falls back to a
+fixed rule, even if that rule is "do nothing".**
 
 ## How does one judgment travel?
 
@@ -92,7 +93,7 @@ Open a real node payload:
 
 The local fallback is disabled when it shares the active worker's host
 and port. On a one-slot server, that side request would evict the worker's
-cache.
+cache. The pre-screen's local screener follows the same rule.
 
 ---
 
@@ -104,8 +105,9 @@ cache.
 | `route` | Which consultant fits at the lowest cost? | [Routing](consultation-routing.md) |
 | `approve` | Can this consult run without asking you? | [Approval](consultation-approval.md) |
 | `prescreen` | Will a strict target probably refuse? | [Pre-screen](consultation-prescreen.md) |
+| `jail` | May an `auto` consult run in the live workspace? | [Isolation](consultation-isolation.md) |
 | `watchdog` | Is the worker healthy, stuck, drifting, or ready to escalate? | [Runtime control](runtime-control.md) |
-| `gate` | Is the work done? | [Runtime control](runtime-control.md) |
+| `gate` | Is the work done, and should the worker continue, replan, stop, or escalate? Did it refuse? | [Runtime control](runtime-control.md) |
 | `guard` | Does this command serve the task or create collateral risk? | [Runtime control](runtime-control.md) |
 | `tool-guard` | Is this retry useful or wasteful? | [Runtime control](runtime-control.md) |
 | `compact` | Which digest steps stay? | [Context](context.md) |
@@ -120,8 +122,10 @@ cache.
 Routing, recall reranking, and call blocking may use an uncalibrated
 answer as a better heuristic.
 
-Memory injection and digest deletion require a calibrated answer.
-**Uncertain classification can't silently rewrite the worker's premises.**
+Memory injection, digest deletion, and loosening a consult's jail require
+a calibrated answer.
+**Uncertain classification can't silently rewrite the worker's premises
+or widen what a consultant can read.**
 
 ---
 

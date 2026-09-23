@@ -181,7 +181,9 @@ likely triggers and the available permissive alternatives.
 ```
 
 The fallback model uses the same registry and availability checks as a
-consultant.
+consultant. It is skipped while it shares the active worker's server:
+on a one-slot server, the side request would evict the worker's cache.
+The result is `unknown`, and the consult continues.
 
 ---
 

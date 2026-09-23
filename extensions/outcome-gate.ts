@@ -26,9 +26,10 @@
 //
 // `refused` catches the worker declining the task on safety/policy
 // grounds. It also runs alone on tool-less settles, where a flat refusal
-// lands. A refusal never gets a nudge; it gets one approval prompt to hop
-// to an abliterated model (triage's lease) and retry. No judge answer =
-// the refusal phrase heuristic from lib/pi-exec.ts.
+// lands. A refusal never gets a nudge; it gets one hop to an abliterated
+// model (triage's lease) and a retry — automatic for cheap workers, behind
+// an approval prompt for any other. No judge answer = the refusal phrase
+// heuristic from lib/pi-exec.ts.
 //
 // Recovery is not binary (fix forward vs give up): "replan" is a first-
 // class action — revert to the last good state and re-approach fresh —
@@ -142,25 +143,30 @@ export default function outcomeGate(pi: ExtensionAPI) {
 	});
 
 	/**
-	 * At most one prompt per task: approval hops to an abliterated model
-	 * (triage's lease) and re-sends the task there. Never nudges the
-	 * refusing model — an aligned model refuses the nudge too.
+	 * At most one hop per task, onto triage's lease, then the task is
+	 * re-sent there. Same rule as triage's predicted hop: a cheap worker
+	 * hops automatically; any other worker was picked on purpose, so it
+	 * asks first (and never hops headless). Never nudges the refusing
+	 * model — an aligned model refuses the nudge too.
 	 */
 	async function handleRefusal(ctx: ExtensionContext, cfg: GeocineConfig, label: string): Promise<GateRecord["refusalHop"]> {
 		if (refusalHandled) return undefined;
 		refusalHandled = true;
-		if (!canHopAbliterated(ctx, cfg) || !ctx.hasUI) {
+		const automatic = isLocalWorker(ctx.model, cfg);
+		if (!canHopAbliterated(ctx, cfg) || (!automatic && !ctx.hasUI)) {
 			ctx.ui.setStatus("gate", `gate: worker refused (${label}) — no abliterated hop available`);
 			return "unavailable";
 		}
-		const model = (ctx.model as { id?: string } | undefined)?.id ?? "The worker";
-		const ok = await ctx.ui.confirm(
-			"Worker refused this task",
-			`${model} declined it (${label}).\nHop to an abliterated model and retry the task there?`,
-		);
-		if (!ok) {
-			ctx.ui.setStatus("gate", `gate: worker refused (${label}) — hop declined`);
-			return "declined";
+		if (!automatic) {
+			const model = (ctx.model as { id?: string } | undefined)?.id ?? "The worker";
+			const ok = await ctx.ui.confirm(
+				"Worker refused this task",
+				`${model} declined it (${label}).\nHop to an abliterated model and retry the task there?`,
+			);
+			if (!ok) {
+				ctx.ui.setStatus("gate", `gate: worker refused (${label}) — hop declined`);
+				return "declined";
+			}
 		}
 		if (!(await hopAfterRefusal(pi, ctx, cfg, lastUserMessage))) return "unavailable";
 		try {
@@ -169,7 +175,7 @@ export default function outcomeGate(pi: ExtensionAPI) {
 			// session state changed; the lease is open for the user's next turn
 		}
 		ctx.ui.setStatus("gate", `gate: worker refused (${label}) — retrying on the abliterated model`);
-		return "accepted";
+		return automatic ? "auto" : "accepted";
 	}
 
 	// For informational tasks the answer IS the work product; without it the

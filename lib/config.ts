@@ -55,9 +55,9 @@ export interface ModelConfig {
 	 *  - "none": model runs in the live cwd with read-only tools
 	 *    (for free/local/lenient models where token waste costs nothing).
 	 *  - "auto": resolved per consult. The boundary exists for one flow —
-	 *    abliterated-lease work consulting an aligned model — so a
-	 *    refusal-sensitive session stages deterministically, an
-	 *    abliterated-class target runs live, and everything else asks the
+	 *    abliterated-lease work consulting an aligned model — so an
+	 *    abliterated-class target runs live, a refusal-sensitive session
+	 *    stages deterministically, and everything else asks the
 	 *    fabric's jail node: confidently-bland content (calibrated tier
 	 *    only) runs live, anything doubtful stages. Fails closed to
 	 *    "staged" without a judge.
@@ -113,6 +113,14 @@ export interface WatchdogConfig {
 	loopThreshold?: number;
 	/** Consecutive failures of the same command that count as stuck. Default 3. */
 	failStreakThreshold?: number;
+	/**
+	 * Mid-task escalate probability (noul) needed before suggesting a
+	 * consult. High on purpose: the suggestion interrupts the loop.
+	 * Default 0.75.
+	 */
+	escalateThreshold?: number;
+	/** Minimum turns between two escalate suggestions. Default 8. */
+	escalateCooldownTurns?: number;
 }
 
 export interface TriageConfig {
@@ -124,19 +132,12 @@ export interface TriageConfig {
 	 * High refusal risk on a strict cheap worker opens an abliterated-model
 	 * lease. Each later user turn is judged to dwell there or return to the
 	 * picker model; ambiguity dwells to avoid model/cache ping-pong.
-	 * Mid-task, an escalate-now probability rides the watchdog's every-turn
-	 * judge call. Requires a configured judge — silently off without one.
-	 * Default true.
+	 * Mid-task escalation belongs to the watchdog (watchdog.escalateThreshold).
+	 * Requires a configured judge; without one an open lease always dwells.
+	 * false stops new routing, but a lease the outcome gate opened still
+	 * gets its dwell/return decisions. Default true.
 	 */
 	enabled?: boolean;
-	/**
-	 * Mid-task escalate probability (noul) needed before suggesting a
-	 * consult. High on purpose: the suggestion interrupts the loop.
-	 * Default 0.75.
-	 */
-	escalateThreshold?: number;
-	/** Minimum turns between two escalate suggestions. Default 8. */
-	cooldownTurns?: number;
 }
 
 export interface GateConfig {
@@ -202,13 +203,13 @@ export interface RescueConfig {
 	/** Capture manual local→frontier rescue episodes. Default true. */
 	enabled?: boolean;
 	/**
-	 * Providers considered "local" (free). A model_select away from one of
-	 * these to any other provider starts a rescue episode.
+	 * Budget providers, local or hosted, for models NOT in the `models`
+	 * registry. A model_select away from one of these to any other
+	 * provider starts a rescue episode.
 	 * Default: ["llama.cpp", "lmstudio", "ollama", "abliteration-ai"].
 	 * For cheap-worker ARMING (triage steers, gate nudges, tool guard) this
-	 * list is only the fallback: a picker model found in the `models`
-	 * collection is classified by its own classes (cheap/local) instead —
-	 * see isLocalWorker.
+	 * list is only the fallback: a registered picker model is classified
+	 * by its own classes instead — see isLocalWorker.
 	 */
 	localProviders?: string[];
 	/** Model used by /distill to draft lessons. Default: prescreen model. */
@@ -391,12 +392,12 @@ export function registryEntry(
  * selected, read per event, never designated — is a cheap worker.
  *
  * Registry first: a model found in the `models` collection is a cheap
- * worker iff it carries the "cheap" or "local" class — its own declared
- * capabilities decide, whoever hosts it. Only unregistered models fall
- * back to the provider heuristic (rescue.localProviders). "Local" is
- * shorthand for cheap, not physically local: the default list already
- * includes hosted abliteration-ai, and a budget cloud host (e.g. baseten
- * running Qwen) belongs there too.
+ * worker iff it carries the "cheap" or "local" class and NOT "frontier".
+ * "cheap" is a price tier only; a frontier-strength model sold at a
+ * budget price (cheap + frontier) is strong enough to run unsteered.
+ * Only unregistered models fall back to the provider heuristic
+ * (rescue.localProviders), which lists budget providers, hosted ones
+ * included (abliteration-ai, baseten).
  *
  * Precondition for all escalation machinery that INJECTS messages or
  * blocks calls — triage steers, mid-task escalate suggestions,
@@ -410,7 +411,7 @@ export function isLocalWorker(model: unknown, cfg: GeocineConfig): boolean {
 	const entry = registryEntry(model, cfg);
 	if (entry) {
 		const classes = entry.model.classes ?? [];
-		return classes.includes("cheap") || classes.includes("local");
+		return (classes.includes("cheap") || classes.includes("local")) && !classes.includes("frontier");
 	}
 	const provider = (model as { provider?: string } | undefined)?.provider;
 	if (!provider) return false;

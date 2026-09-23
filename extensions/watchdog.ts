@@ -11,7 +11,8 @@
 //   counter fired, the judge verifies: its confident "ok" overrules the
 //   counter (confidence-gated routing), non-ok refines the verdict label.
 //   Unavailable/timeout = silently fall through to Tier 1. The same call
-//   carries the mid-task escalate-now noul (triage config): judged against
+//   carries the mid-task escalate-now noul (watchdog.escalateThreshold /
+//   escalateCooldownTurns): judged against
 //   session stage (invested tokens, cache warmth), a high probability
 //   suggests handing the task to the frontier rescuer — even on quiet
 //   turns, since grinding without errors on a too-hard task never trips a
@@ -296,10 +297,9 @@ export default function watchdog(pi: ExtensionAPI) {
 			},
 		};
 		// The escalate-now check rides the same call (parallel questions are
-		// one request — near-free). It is the mid-task half of triage, and
-		// like triage it only applies while the cheap local worker is
-		// active: a frontier main model gets no escalate suggestions.
-		if (cfg.triage?.enabled !== false && isLocalWorker(ctx.model, cfg) && !taskIsRefusalSensitive()) {
+		// one request — near-free). Like triage it only applies while a cheap
+		// worker is active: a frontier main model gets no escalate suggestions.
+		if (isLocalWorker(ctx.model, cfg) && !taskIsRefusalSensitive()) {
 			questions.escalate = {
 				type: "noul",
 				instructions:
@@ -336,8 +336,8 @@ export default function watchdog(pi: ExtensionAPI) {
 				// can still fire: grinding without errors on a task beyond
 				// local capability looks exactly like this.
 				if (!counterVerdict) {
-					const threshold = cfg.triage?.escalateThreshold ?? 0.75;
-					const escalateCooldown = cfg.triage?.cooldownTurns ?? 8;
+					const threshold = wd.escalateThreshold ?? 0.75;
+					const escalateCooldown = wd.escalateCooldownTurns ?? 8;
 					if (
 						escalateP !== undefined &&
 						escalateP >= threshold &&
@@ -462,7 +462,7 @@ export default function watchdog(pi: ExtensionAPI) {
 				hint +=
 					` This is repeat detection #${hintsSoFar + 1} for the same issue — consider the consult tool now: stage the relevant files and ask for a diagnosis instead of retrying.`;
 			}
-			if (escalateP !== undefined && escalateP >= (cfg.triage?.escalateThreshold ?? 0.75)) {
+			if (escalateP !== undefined && escalateP >= (wd.escalateThreshold ?? 0.75)) {
 				hint += ` The escalation check agrees a consult now beats another local attempt (p=${escalateP.toFixed(2)}).`;
 				lastEscalateTurn = turnIndex;
 			}
