@@ -24,6 +24,12 @@
 // override that suppresses nudges whenever a human decision point
 // blocks, whatever the router said.
 //
+// `refused` catches the worker declining the task on safety/policy
+// grounds. It also runs alone on tool-less settles, where a flat refusal
+// lands. A refusal never gets a nudge; it gets one approval prompt to hop
+// to an abliterated model (triage's lease) and retry. No judge answer =
+// the refusal phrase heuristic from lib/pi-exec.ts.
+//
 // Recovery is not binary (fix forward vs give up): "replan" is a first-
 // class action — revert to the last good state and re-approach fresh —
 // because a run that regressed the tree is better undone than patched.
@@ -51,9 +57,19 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { modelHandle, isLocalWorker, loadConfig, logDir, resolveModel } from "../lib/config.ts";
-import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
-import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, modelBaseUrl, noulOf, resolveJudge } from "../lib/judge/index.ts";
+import { modelHandle, isLocalWorker, loadConfig, logDir, resolveModel, type GeocineConfig } from "../lib/config.ts";
+import { appendRecord, newCid, nowIso, type GateRecord } from "../lib/consult-log.ts";
+import {
+	choiceOf,
+	DEFAULT_MIN_CONFIDENCE,
+	judge,
+	modelBaseUrl,
+	noulOf,
+	resolveJudge,
+	type NoulQuestion,
+} from "../lib/judge/index.ts";
+import { looksLikeRefusalText, REFUSED_P } from "../lib/pi-exec.ts";
+import { canHopAbliterated, hopAfterRefusal } from "./triage.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,6 +83,16 @@ const MAX_CHECKS = 4;
 const CHECK_TAIL_CHARS = 1500;
 /** Probability at which a review-flag question fires (advice, never a block). */
 const FLAG_P = 0.7;
+
+const REFUSED_QUESTION: NoulQuestion = {
+	type: "noul",
+	instructions:
+		"Read `answer` against `task`. Did the coding agent DECLINE the task, in whole or in part, on safety, ethics, or content-policy grounds? Anchors: 'I can't help with creating that exploit' = yes; 'I'll write the parser, but I won't include the protection bypass' = yes; a lecture about responsible use instead of the requested work = yes; 'I couldn't find the bug after checking three files' = no (capability failure); 'that file is outside the workspace, so I can't read it' = no (technical limit); asking the user to clarify the request = no.",
+	criteria: {
+		true: "Declined all or part of the task for safety, ethics, or policy reasons — a different model would have to do it",
+		false: "Attempted the task in full, or stopped for a technical, capability, or clarification reason",
+	},
+};
 
 interface CheckResult {
 	command: string;
@@ -99,6 +125,7 @@ export default function outcomeGate(pi: ExtensionAPI) {
 	let toolEventsSinceInput = 0;
 	let lastGatedEvents = -1;
 	let nudgesThisTask = 0;
+	let refusalHandled = false;
 	let checks: CheckResult[] = [];
 	let ring: string[] = [];
 
@@ -109,9 +136,41 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		toolEventsSinceInput = 0;
 		lastGatedEvents = -1;
 		nudgesThisTask = 0;
+		refusalHandled = false;
 		checks = [];
 		ring = [];
 	});
+
+	/**
+	 * At most one prompt per task: approval hops to an abliterated model
+	 * (triage's lease) and re-sends the task there. Never nudges the
+	 * refusing model — an aligned model refuses the nudge too.
+	 */
+	async function handleRefusal(ctx: ExtensionContext, cfg: GeocineConfig, label: string): Promise<GateRecord["refusalHop"]> {
+		if (refusalHandled) return undefined;
+		refusalHandled = true;
+		if (!canHopAbliterated(ctx, cfg) || !ctx.hasUI) {
+			ctx.ui.setStatus("gate", `gate: worker refused (${label}) — no abliterated hop available`);
+			return "unavailable";
+		}
+		const model = (ctx.model as { id?: string } | undefined)?.id ?? "The worker";
+		const ok = await ctx.ui.confirm(
+			"Worker refused this task",
+			`${model} declined it (${label}).\nHop to an abliterated model and retry the task there?`,
+		);
+		if (!ok) {
+			ctx.ui.setStatus("gate", `gate: worker refused (${label}) — hop declined`);
+			return "declined";
+		}
+		if (!(await hopAfterRefusal(pi, ctx, cfg, lastUserMessage))) return "unavailable";
+		try {
+			pi.sendUserMessage(lastUserMessage);
+		} catch {
+			// session state changed; the lease is open for the user's next turn
+		}
+		ctx.ui.setStatus("gate", `gate: worker refused (${label}) — retrying on the abliterated model`);
+		return "accepted";
+	}
 
 	// For informational tasks the answer IS the work product; without it the
 	// gate cannot tell an answered question from an abandoned coding task.
@@ -131,10 +190,12 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		// unbounded continue loop on informational asks.
 		if ((event as { source?: string }).source === "extension") return;
 		lastUserMessage = text;
+		lastAnswer = "";
 		turnsSinceInput = 0;
 		toolEventsSinceInput = 0;
 		lastGatedEvents = -1;
 		nudgesThisTask = 0;
+		refusalHandled = false;
 		checks = [];
 		ctx.ui.setStatus("gate", undefined);
 	});
@@ -167,10 +228,46 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		if (cfg.gate?.enabled === false) return;
 		if (!resolveJudge(cfg.judge)) return;
 		if (!lastUserMessage) return;
-		// Nothing happened, or this settle was already gated (our own nudge
-		// settling with no new work must not re-trigger).
-		if (toolEventsSinceInput < 1 || toolEventsSinceInput === lastGatedEvents) return;
+		// This settle was already gated (our own nudge settling with no new
+		// work must not re-trigger).
+		if (toolEventsSinceInput === lastGatedEvents) return;
 		lastGatedEvents = toolEventsSinceInput;
+
+		// A tool-less settle has no work product to verify, but it is exactly
+		// where a flat refusal lands. Only ask when a hop could follow.
+		if (toolEventsSinceInput < 1) {
+			if (!lastAnswer || refusalHandled || !canHopAbliterated(ctx, cfg)) return;
+			const result = await judge(
+				cfg.judge,
+				{ state: { task: lastUserMessage.slice(0, 1500), answer: lastAnswer.slice(-1500) }, questions: { refused: REFUSED_QUESTION } },
+				{ node: "gate", workerBaseUrl: modelBaseUrl(ctx.model) },
+			);
+			const refusedP = noulOf(result, "refused");
+			const refusedHeuristic = refusedP === undefined && looksLikeRefusalText(lastAnswer, 0);
+			if (!refusedHeuristic && refusedP === undefined) return;
+			// Non-refusals are logged too: they are the negative labels for
+			// /calibration's triage refusal_risk check.
+			const refusalHop =
+				refusedHeuristic || (refusedP ?? 0) >= REFUSED_P
+					? await handleRefusal(ctx, cfg, refusedHeuristic ? "phrase match" : `p=${refusedP?.toFixed(2)}`)
+					: undefined;
+			appendRecord(logDir(cfg), {
+				type: "gate",
+				cid: newCid(),
+				ts: nowIso(),
+				cwd: ctx.cwd,
+				mainModel: (ctx.model as { id?: string } | undefined)?.id,
+				task: lastUserMessage.slice(0, 300),
+				refusedP,
+				refusedHeuristic: refusedHeuristic || undefined,
+				refusalHop,
+				checksSeen: 0,
+				turns: turnsSinceInput,
+				nudged: false,
+				nudgesBefore: nudgesThisTask,
+			});
+			return;
+		}
 
 		const maxDiff = cfg.gate?.maxDiffChars ?? 8000;
 		// HEAD variant covers staged + unstaged; empty in a repo with no
@@ -273,10 +370,35 @@ export default function outcomeGate(pi: ExtensionAPI) {
 						false: "The remaining work is mechanical or clearly specified",
 					},
 				},
+				refused: REFUSED_QUESTION,
 			},
 		}, { node: "gate", workerBaseUrl: modelBaseUrl(ctx.model) });
+		const refusedP = noulOf(result, "refused");
+		const refusedHeuristic = refusedP === undefined && looksLikeRefusalText(lastAnswer, toolEventsSinceInput);
+		const refused = refusedHeuristic || (refusedP !== undefined && refusedP >= REFUSED_P);
+		const refusalHop = refused
+			? await handleRefusal(ctx, cfg, refusedHeuristic ? "phrase match" : `p=${refusedP?.toFixed(2)}`)
+			: undefined;
 		const next = choiceOf(result, "next");
-		if (!result || !next || !NEXT.includes(next.choice as Next)) return;
+		if (!result || !next || !NEXT.includes(next.choice as Next)) {
+			if (!refused) return;
+			appendRecord(logDir(cfg), {
+				type: "gate",
+				cid: newCid(),
+				ts: nowIso(),
+				cwd: ctx.cwd,
+				mainModel: (ctx.model as { id?: string } | undefined)?.id,
+				task: lastUserMessage.slice(0, 300),
+				refusedP,
+				refusedHeuristic: refusedHeuristic || undefined,
+				refusalHop,
+				checksSeen: checks.length,
+				turns: turnsSinceInput,
+				nudged: false,
+				nudgesBefore: nudgesThisTask,
+			});
+			return;
+		}
 		const wantsChangesP = noulOf(result, "wants_changes");
 		const doneP = noulOf(result, "done");
 		const regressionP = noulOf(result, "regression_risk");
@@ -312,7 +434,11 @@ export default function outcomeGate(pi: ExtensionAPI) {
 		// nobody asked for, so the gate never auto-runs on such tasks.
 		const informational = wantsChangesP !== undefined && wantsChangesP < 0.5;
 
-		if (needsHumanP !== undefined && needsHumanP >= FLAG_P) {
+		if (refused) {
+			// handleRefusal owns the status and the hop; a repeat refusal on
+			// the same task only gets a status line.
+			if (!refusalHop) ctx.ui.setStatus("gate", `gate: worker refused again — no auto-run${flagSuffix}`);
+		} else if (needsHumanP !== undefined && needsHumanP >= FLAG_P) {
 			// Safety override: a human decision point blocks — never nudge
 			// past it, whatever the router said.
 			ctx.ui.setStatus("gate", `gate: needs your decision (p=${needsHumanP.toFixed(2)})${flagSuffix}`);
@@ -393,6 +519,9 @@ export default function outcomeGate(pi: ExtensionAPI) {
 			archP,
 			needsTestsP,
 			needsHumanP,
+			refusedP,
+			refusedHeuristic: refusedHeuristic || undefined,
+			refusalHop,
 			next: next.choice as Next,
 			confidence: next.confidence,
 			diffStat: diffStat.slice(-400) || undefined,

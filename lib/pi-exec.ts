@@ -210,11 +210,16 @@ export async function runPi(options: PiRunOptions): Promise<PiRunResult> {
 }
 
 const REFUSAL_PATTERN =
-	/\b(I (?:can(?:no|')t|cannot|won't|am (?:not able|unable)|'m (?:not able|unable)))\s+(?:help|assist|provide|comply|continue|analyze|do that)|against (?:my|our) (?:guidelines|policy|policies)|I must (?:decline|refuse)/i;
+	/\b(I (?:can(?:no|['’])t|cannot|won['’]t|am (?:not able|unable)|['’]m (?:not able|unable)))\s+(?:help|assist|provide|comply|continue|analyze|do that)|against (?:my|our) (?:guidelines|policy|policies)|I must (?:decline|refuse)/i;
+
+/** Gate `refused` noul threshold. A false yes costs one declined approval prompt; a miss leaves the refusal to the user. */
+export const REFUSED_P = 0.7;
 
 /** Heuristic refusal detector: refusal phrasing + little/no actual work. */
+export function looksLikeRefusalText(text: string, toolCalls: number): boolean {
+	return Boolean(text) && toolCalls <= 2 && REFUSAL_PATTERN.test(text);
+}
+
 export function looksLikeRefusal(result: PiRunResult): boolean {
-	if (!result.finalText) return false;
-	if (result.toolCalls.length > 2) return false;
-	return REFUSAL_PATTERN.test(result.finalText);
+	return looksLikeRefusalText(result.finalText ?? "", result.toolCalls.length);
 }

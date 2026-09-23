@@ -164,6 +164,26 @@ export default function triage(pi: ExtensionAPI) {
 	});
 }
 
+/** True when a refusal can be acted on: a strict worker with an abliterated model configured. */
+export function canHopAbliterated(ctx: ExtensionContext, cfg: GeocineConfig): boolean {
+	return !isAbliterated(ctx.model, cfg) && hasAbliterated(cfg);
+}
+
+/**
+ * Hop after an observed refusal (outcome gate). Opens the same lease as a
+ * predicted high refusal risk, so later turns dwell or return as usual.
+ */
+export async function hopAfterRefusal(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	cfg: GeocineConfig,
+	task: string,
+): Promise<string | undefined> {
+	const name = await hopAbliterated(pi, ctx, cfg, task, "Worker refused");
+	if (name) lastRefusalHigh = true;
+	return name;
+}
+
 function hasAbliterated(cfg: GeocineConfig): boolean {
 	return Object.values(cfg.models).some((c) => c.classes?.includes("abliterated"));
 }
@@ -178,6 +198,7 @@ async function hopAbliterated(
 	ctx: ExtensionContext,
 	cfg: GeocineConfig,
 	task: string,
+	reason = "High refusal risk",
 ): Promise<string | undefined> {
 	const fromModel = ctx.model as { provider?: string; id?: string } | undefined;
 	if (!fromModel?.provider || !fromModel.id) return undefined;
@@ -219,7 +240,7 @@ async function hopAbliterated(
 		const local = c.classes?.includes("local") ? "local " : "";
 		const skipNote = skipped.length ? ` (skipped ${skipped.join("; ")})` : "";
 		ctx.ui.notify(
-			`[triage] High refusal risk — ${local}${modelLabel(c)} {abliterated}; TypeSafe will dwell or return as the thread changes${skipNote}`,
+			`[triage] ${reason} — ${local}${modelLabel(c)} {abliterated}; TypeSafe will dwell or return as the thread changes${skipNote}`,
 			"info",
 		);
 		return name;

@@ -176,8 +176,15 @@ export interface GateRecord extends BaseRecord {
 	needsTestsP?: number;
 	/** Probability a human decision point blocks — suppresses nudges. */
 	needsHumanP?: number;
-	next: "continue" | "replan" | "stop" | "escalate";
-	confidence: number;
+	/** Probability the worker declined the task on safety/policy grounds. */
+	refusedP?: number;
+	/** Refusal came from the phrase heuristic because no judge tier answered. */
+	refusedHeuristic?: boolean;
+	/** Refusal prompt outcome: the user accepted the hop, declined it, or it could not hop. */
+	refusalHop?: "accepted" | "declined" | "unavailable";
+	/** Absent on refusal-only records (tool-less settles). */
+	next?: "continue" | "replan" | "stop" | "escalate";
+	confidence?: number;
 	/** git diff --stat tail at decision time (evidence summary). */
 	diffStat?: string;
 	/** How many captured test/lint/build outputs fed the judgment. */

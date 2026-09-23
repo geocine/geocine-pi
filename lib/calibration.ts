@@ -16,6 +16,9 @@
 //   approve   when the approve node answered but stayed below the auto
 //             threshold, the USER decided — approveP vs user_yes/user_no
 //             is a direct calibration pair.
+//   refusal   triage's pre-turn refusal_risk vs whether the gate then saw
+//             the worker refuse the same cwd+task. Refusals should climb
+//             with predicted risk; flat rates mean the prediction is noise.
 //   triage /  volume and mix over the recent window, so drift is visible
 //   watchdog  ("why is everything suddenly frontier-routed?").
 //
@@ -31,13 +34,16 @@ import * as path from "node:path";
 import {
 	type ApproveStats,
 	emptyGateStats,
+	emptyRefusalStats,
 	emptySnapshot,
 	type GateStats,
 	loadSnapshot,
 	MAX_EXEMPLARS,
+	type RefusalStats,
 	saveSnapshot,
 	snapshotFile,
 } from "./calibration-snapshot.ts";
+import { REFUSED_P } from "./pi-exec.ts";
 import { addInto, aggregateRoutingWindow, clearRouteHistoryCache } from "./route-history.ts";
 
 /** Months of consult-log history scanned for the live layer. */
@@ -55,6 +61,12 @@ const BINS = [
 	{ label: "<0.70", min: 0, max: 0.7 },
 	{ label: "0.70–0.84", min: 0.7, max: 0.85 },
 	{ label: "≥0.85", min: 0.85, max: 1.01 },
+];
+/** triage refusal_risk (score 0..2) bins; length must equal calibration-snapshot RISK_BIN_COUNT. 1.4 = triage's hop cutoff. */
+const RISK_BINS = [
+	{ label: "benign", min: 0, max: 0.7 },
+	{ label: "plausible", min: 0.7, max: 1.4 },
+	{ label: "likely", min: 1.4, max: 2.01 },
 ];
 
 interface GateRow {
@@ -83,6 +95,10 @@ interface RawRecord {
 	route?: string;
 	verdict?: string;
 	hintSent?: boolean;
+	refusalRisk?: number;
+	safetyAction?: string;
+	refusedP?: number;
+	refusedHeuristic?: boolean;
 }
 
 /** Log records inside the ts window (afterTs, beforeTs]; "" = unbounded. */
@@ -182,6 +198,44 @@ function gateStatsFrom(records: RawRecord[]): GateStats {
 	return stats;
 }
 
+/**
+ * Refusal join: each triage prediction paired with whether any gate check
+ * for the same cwd+task saw a refusal. Tasks triage already hopped (or
+ * kept on an abliterated lease) are skipped — the strict model never ran
+ * them, so they cannot test the prediction. Tasks with no gate check have
+ * no label and are skipped too.
+ */
+function refusalStatsFrom(records: RawRecord[]): RefusalStats {
+	const stats = emptyRefusalStats();
+	const observed = new Map<string, boolean>();
+	for (const r of records) {
+		if (r.type !== "gate" || !r.cwd || !r.task) continue;
+		if (r.refusedP === undefined && !r.refusedHeuristic) continue;
+		const key = `${r.cwd}\u0000${r.task}`;
+		const refused = Boolean(r.refusedHeuristic) || (r.refusedP ?? 0) >= REFUSED_P;
+		observed.set(key, (observed.get(key) ?? false) || refused);
+	}
+	for (const r of records) {
+		if (r.type !== "triage" || !r.cwd || !r.task || r.refusalRisk === undefined) continue;
+		if (r.safetyAction === "hop" || r.safetyAction === "dwell") continue;
+		const refused = observed.get(`${r.cwd}\u0000${r.task}`);
+		if (refused === undefined) continue;
+		const risk = r.refusalRisk;
+		const bin = RISK_BINS.findIndex((b) => risk >= b.min && risk < b.max);
+		if (bin < 0) continue;
+		stats.bins[bin].observed++;
+		if (refused) stats.bins[bin].refused++;
+	}
+	return stats;
+}
+
+function mergeRefusal(target: RefusalStats, source: RefusalStats): void {
+	for (const [i, bin] of source.bins.entries()) {
+		target.bins[i].refused += bin.refused;
+		target.bins[i].observed += bin.observed;
+	}
+}
+
 function approveStatsFrom(records: RawRecord[]): ApproveStats {
 	const stats: ApproveStats = { auto: 0, yesCount: 0, yesSumP: 0, noCount: 0, noSumP: 0 };
 	for (const r of records) {
@@ -234,6 +288,7 @@ export function foldCalibration(dir: string): { folded: number; through: string;
 	if (records.length) {
 		mergeGate(snap.gate, gateStatsFrom(records));
 		mergeApprove(snap.approve, approveStatsFrom(records));
+		mergeRefusal(snap.refusal, refusalStatsFrom(records));
 		const routing = aggregateRoutingWindow(dir, snap.foldedThrough, before);
 		for (const [key, m] of Object.entries(routing.models)) {
 			const existing = snap.routing.models[key];
@@ -308,6 +363,24 @@ export function calibrationReport(dir: string): string[] {
 			lines.push(`  mean approveP when you said yes ${meanYes} vs no ${meanNo}`);
 			lines.push("  reading: a wide yes/no gap means the node ranks well — approval.approveThreshold can come down; no gap means it can't tell and the threshold only buys silence");
 		}
+	}
+
+	// --- refusal prediction: triage refusal_risk vs gate-observed refusal ---
+	const refusal = emptyRefusalStats();
+	mergeRefusal(refusal, snap.refusal);
+	mergeRefusal(refusal, refusalStatsFrom(live));
+	const refusalTotal = refusal.bins.reduce((n, b) => n + b.observed, 0);
+	if (refusalTotal) {
+		const parts = RISK_BINS.map((b, i) => {
+			const s = refusal.bins[i];
+			return s.observed ? `${b.label} → ${s.refused}/${s.observed} refused` : "";
+		}).filter(Boolean);
+		lines.push("");
+		lines.push(`refusals: ${refusalTotal} tasks with a triage prediction and a gate observation`);
+		lines.push(`  by predicted risk: ${parts.join(" · ")}`);
+		lines.push(
+			"  reading: refusals should climb with predicted risk; if \"likely\" tasks aren't refused much more often than \"benign\" ones, triage's pre-turn hop is guessing and the gate's after-the-fact check is doing the work",
+		);
 	}
 
 	// --- triage / watchdog volume + mix (recent window only; drift info, not folded) ---

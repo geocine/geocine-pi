@@ -25,6 +25,8 @@ import * as path from "node:path";
 export const SNAPSHOT_VERSION = 1;
 /** Confidence bins in GateStats.bins (calibration.ts BINS must match). */
 export const BIN_COUNT = 3;
+/** Refusal-risk bins in RefusalStats.bins (calibration.ts RISK_BINS must match). */
+export const RISK_BIN_COUNT = 3;
 /** Exemplars kept (the judge sees the newest ones). */
 export const MAX_EXEMPLARS = 10;
 /** Consultant identities kept, largest consult counts win. */
@@ -73,6 +75,14 @@ export interface GateStats {
 	bins: NudgeBin[];
 }
 
+/**
+ * Triage's predicted refusal_risk vs the gate's observed refusal for the
+ * same task. Bins are aligned with calibration.ts RISK_BINS.
+ */
+export interface RefusalStats {
+	bins: { refused: number; observed: number }[];
+}
+
 export interface ApproveStats {
 	auto: number;
 	yesCount: number;
@@ -94,6 +104,11 @@ export interface CalibrationSnapshot {
 	};
 	gate: GateStats;
 	approve: ApproveStats;
+	refusal: RefusalStats;
+}
+
+export function emptyRefusalStats(): RefusalStats {
+	return { bins: Array.from({ length: RISK_BIN_COUNT }, () => ({ refused: 0, observed: 0 })) };
 }
 
 export function emptyGateStats(): GateStats {
@@ -116,6 +131,7 @@ export function emptySnapshot(foldedThrough = ""): CalibrationSnapshot {
 		routing: { models: {}, exemplars: [] },
 		gate: emptyGateStats(),
 		approve: { auto: 0, yesCount: 0, yesSumP: 0, noCount: 0, noSumP: 0 },
+		refusal: emptyRefusalStats(),
 	};
 }
 
@@ -133,6 +149,10 @@ export function loadSnapshot(logDirPath: string): CalibrationSnapshot {
 		// Re-binning across versions is not attempted; mismatched bins reset.
 		if (!Array.isArray(raw.gate.bins) || raw.gate.bins.length !== BIN_COUNT) {
 			raw.gate = { ...emptyGateStats(), verdicts: raw.gate.verdicts ?? {}, informational: raw.gate.informational ?? 0 };
+		}
+		// Snapshots from before the refusal join start its counters at zero.
+		if (!Array.isArray(raw.refusal?.bins) || raw.refusal.bins.length !== RISK_BIN_COUNT) {
+			raw.refusal = emptyRefusalStats();
 		}
 		return raw;
 	} catch {

@@ -9,7 +9,7 @@ final answer. One detector can't see all three.
 | --- | --- | --- |
 | Guards | One command or repeated tool call | Allow or block |
 | Watchdog | Recent turns and tool outcomes | Stay quiet, correct, or suggest a consult |
-| Outcome gate | Diff, checks, trace, and session stage | Continue, replan, stop, escalate, or wait for you |
+| Outcome gate | Diff, checks, trace, final answer, and session stage | Continue, replan, stop, escalate, wait for you, or offer a hop after a refusal |
 
 ## Is this call harmful or wasteful?
 
@@ -153,6 +153,47 @@ the nudge budget. **`maxNudgesPerTask` is a real cap, not a suggestion.**
 
 ---
 
+## What if the worker refuses?
+
+Triage predicts refusals before a turn. Some still get through: the
+worker answers "I can't help with that" and stops. A pure refusal makes
+no tool calls, so the gate used to skip it, and a `continue` nudge would
+only earn a second refusal.
+
+```mermaid
+sequenceDiagram
+    participant W as Worker
+    participant G as Outcome gate
+    participant J as TypeSafe
+    participant U as You
+    participant T as Triage lease
+
+    W-->>G: Agent settled
+    G->>J: refused? (alone if no tools ran, else with the gate questions)
+    alt Refused, p >= 0.7 (or phrase match if no answer)
+        G->>U: Hop to an abliterated model and retry?
+        alt Approve
+            U-->>T: Open the hop lease
+            T-->>W: Same task, abliterated model
+        else Decline
+            G-->>U: Status only
+        end
+    else Not a refusal
+        G->>G: Normal verdict flow
+    end
+```
+
+**A refusal never gets a nudge.** It gets one approval prompt per task.
+The hop reuses triage's lease, so later turns dwell or return as usual.
+
+`refused` counts safety, ethics, or policy refusals, including partial
+ones ("I'll write the parser but not the bypass"). "I couldn't find the
+bug" is a capability failure, not a refusal. The tool-less check runs
+only when a hop is possible: a strict worker with an abliterated model
+configured.
+
+---
+
 ## How do you know the judge is right?
 
 The thresholds only work if the probabilities behind them mean
@@ -173,6 +214,19 @@ decided. The report bins these by confidence.
 low-confidence ones, the confidence is noise** — raise
 `judge.minConfidence` or stop trusting auto-approval. If they do, the
 thresholds can come down and the fabric earns more autonomy.
+
+**Refusal predictions get the same check.** Triage guesses before the
+turn ("likely to refuse"); the gate sees what happened after. The report
+pairs them by task:
+
+```text
+refusals: 52 tasks with a triage prediction and a gate observation
+  by predicted risk: benign → 1/30 refused · plausible → 2/10 refused · likely → 9/12 refused
+```
+
+Refusals should climb with predicted risk. If they don't, triage's
+pre-turn hop is guessing and the gate's check is doing the real work.
+Tasks triage already hopped are left out: the strict model never ran them.
 
 ### Where does the learning live?
 
@@ -236,7 +290,7 @@ Pi's native tool approval remains the final permission boundary.
 | `guard` | Command, task, risk, blocked |
 | `tool_guard` | Tool, call, trigger, waste probability, blocked |
 | `watchdog` | Digest, tier, verdict, confidence |
-| `gate` | Task intent, done probability, verdict (continue/replan/stop/escalate), diff stat, checks, review flags, nudges before |
+| `gate` | Task intent, done probability, verdict (continue/replan/stop/escalate), diff stat, checks, review flags, nudges before, refusal probability and hop outcome |
 
 Implementation: `extensions/command-guard.ts`,
 `extensions/tool-guard.ts`, `extensions/watchdog.ts`,
