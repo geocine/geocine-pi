@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>geocine-pi showreel</title>
+<style>
+	@font-face { font-family: AagoBl; src: url(/fonts/positype-aago-bl.otf); }
+	@font-face { font-family: AagoCmp; src: url(/fonts/positype-aago-compressed-bl.otf); }
+	@font-face { font-family: AagoMd; src: url(/fonts/positype-aago-md.otf); }
+	@font-face { font-family: Fira; src: url(/fonts/FIRACODE-MEDIUM.TTF); }
+	@font-face { font-family: FiraB; src: url(/fonts/FIRACODE-BOLD.TTF); }
+	html, body { margin: 0; background: #000; color: #aaa; font: 13px monospace; height: 100%; }
+	body { display: flex; flex-direction: column; }
+	#wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
+	canvas { max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9; }
+	#bar { display: flex; gap: 12px; padding: 8px 12px; align-items: center; }
+	#bar input[type=range] { flex: 1; }
+	body.slide, body.slide canvas { cursor: none; }
+	body.slide canvas { width: 100vw; height: 100vh; object-fit: contain; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<div id="bar"><button id="play">play</button><input id="scrub" type="range" min="0" max="15" step="0.001" value="0" /><span id="tc">0.000</span><label><input id="hq" type="checkbox" /> motion blur</label></div>
+<audio id="audio" src="audio.wav" preload="auto"></audio>
+<script type="module">
+	import { FPS, VDUR as DUR, createRenderer } from './reel.js';
+	import { toVideo } from './timeline.js';
+	const q = new URLSearchParams(location.search);
+	const slide = q.has('slide');
+	await Promise.all(['AagoBl', 'AagoCmp', 'AagoMd', 'Fira', 'FiraB'].map((f) => document.fonts.load(`40px ${f}`)));
+	const canvas = document.getElementById('c');
+	const r = createRenderer(canvas);
+	document.getElementById('scrub').max = DUR;
+	const blob = () => new Promise((res) => canvas.toBlob(res, 'image/png'));
+
+	if (q.has('render')) {
+		document.getElementById('bar').remove();
+		const from = +(q.get('from') ?? 0), to = +(q.get('to') ?? Math.round(DUR * FPS));
+		const subs = q.has('subs') ? +q.get('subs') : undefined;
+		const t0 = performance.now();
+		for (let f = from; f < to; f++) {
+			r.frame(f / FPS, { subs, fi: f });
+			await fetch(`/frame?f=${f}`, { method: 'POST', body: await blob() });
+			if (f % 30 === 0) fetch(`/log?m=${encodeURIComponent(`frame ${f}/${to} ${((performance.now() - t0) / 1000).toFixed(1)}s`)}`, { method: 'POST' });
+		}
+		await fetch('/done', { method: 'POST' });
+	} else if (q.has('stills')) {
+		document.getElementById('bar').remove();
+		for (const t of q.get('stills').split(',').map(Number)) {
+			r.frame(t, { fi: Math.round(t * FPS) });
+			await fetch(`/still?t=${t}`, { method: 'POST', body: await blob() });
+		}
+		await fetch('/done', { method: 'POST' });
+	} else {
+		const audio = document.getElementById('audio');
+		const scrub = document.getElementById('scrub'), tc = document.getElementById('tc'), hq = document.getElementById('hq');
+		// A slide holds on the end card instead of fading to black.
+		const END = slide ? toVideo(14.72) : DUR;
+		let playing = false, t = 0, start = 0;
+		if (slide) {
+			document.body.classList.add('slide');
+			document.getElementById('bar').style.display = 'none';
+		}
+		const draw = () => {
+			r.frame(t, { subs: hq.checked ? undefined : 1, fi: Math.round(t * FPS) });
+			scrub.value = t;
+			tc.textContent = t.toFixed(3);
+		};
+		const loop = (now) => {
+			if (!playing) return;
+			t = audio.paused ? (now - start) / 1000 : audio.currentTime;
+			if (t >= END) { playing = false; t = END - 1 / FPS; audio.pause(); }
+			draw();
+			requestAnimationFrame(loop);
+		};
+		const toggle = () => {
+			playing = !playing;
+			if (playing) {
+				if (t >= END - 0.05) t = 0;
+				audio.currentTime = t;
+				audio.play().catch(() => {});
+				start = performance.now() - t * 1000;
+				requestAnimationFrame(loop);
+			} else audio.pause();
+		};
+		document.getElementById('play').onclick = toggle;
+		const restart = () => { playing = false; audio.pause(); t = 0; draw(); };
+		addEventListener('keydown', (e) => {
+			if (e.code === 'Space' || (slide && (e.code === 'ArrowRight' || e.code === 'PageDown'))) { e.preventDefault(); toggle(); }
+			else if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+			else if (e.code === 'KeyR') restart();
+		});
+		if (slide) canvas.onclick = toggle;
+		scrub.oninput = () => { t = +scrub.value; audio.currentTime = t; if (!playing) draw(); };
+		hq.onchange = () => { if (!playing) draw(); };
+		draw();
+	}
+</script>
+</body>
+</html>

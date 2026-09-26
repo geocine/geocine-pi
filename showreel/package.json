@@ -1,0 +1,13 @@
+{
+	"name": "geocine-pi-showreel",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "npm run audio && npm run render && npm run web",
+		"audio": "node audio.mjs",
+		"render": "node render.mjs",
+		"web": "ffmpeg -y -loglevel error -i geocine-pi-showreel.mp4 -c:v libx264 -preset slow -crf 21 -tune film -pix_fmt yuv420p -c:a copy -movflags +faststart geocine-pi-showreel-web.mp4",
+		"preview": "node render.mjs --serve",
+		"stills": "node render.mjs --stills"
+	}
+}
