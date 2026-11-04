@@ -7,8 +7,9 @@
 // To customize a new model family: add <family>.ts exporting a ModelHarness,
 // then append it to HARNESSES below. Never call pi.on() from harness files.
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { BeforeProviderRequestEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../../lib/config.ts";
+import { recordWorkerPayload } from "../../lib/keepalive.ts";
 import { richSelect, type SelectItem } from "../../lib/rich-select.ts";
 import { applyAliasesToPayload, removeToolsFromPayload, restoreCanonicalToolCalls } from "./aliases.ts";
 import { deepseekHarness } from "./deepseek.ts";
@@ -175,7 +176,16 @@ export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 		return names;
 	}
 
-	pi.on("before_provider_request", (event, ctx) => {
+	// The last geocine payload hook: what it returns is what goes out (unless
+	// another package rewrites it later), so it is also where the keep-alive
+	// captures the worker's final request (lib/keepalive.ts).
+	pi.on("before_provider_request", async (event, ctx) => {
+		const result = await dispatchPayload(event, ctx);
+		recordWorkerPayload(result ?? event.payload, ctx);
+		return result;
+	});
+
+	async function dispatchPayload(event: BeforeProviderRequestEvent, ctx: ExtensionContext): Promise<unknown> {
 		const harness = activeHarness(ctx);
 		let payload = event.payload;
 		const strippedNames = foreignOwnedTools(harness);
@@ -189,8 +199,9 @@ export default function modelHarnessDispatcher(pi: ExtensionAPI) {
 		const aliased = aliases ? applyAliasesToPayload(payload, aliases) : undefined;
 		if (aliased) payload = aliased;
 		const nextEvent = payload !== event.payload ? { ...event, payload } : event;
-		return harness.beforeProviderRequest?.(nextEvent, ctx) ?? (payload !== event.payload ? payload : undefined);
-	});
+		const patched = await harness.beforeProviderRequest?.(nextEvent, ctx);
+		return patched ?? (payload !== event.payload ? payload : undefined);
+	}
 
 	pi.on("message_end", async (event, ctx) => {
 		const harness = activeHarness(ctx);

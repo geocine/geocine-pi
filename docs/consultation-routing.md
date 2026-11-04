@@ -240,4 +240,48 @@ confidence, and availability exclusions.
 Implementation: `lib/config.ts`, `lib/availability.ts`, and
 `extensions/advisor.ts`.
 
+## Does a consult cost the worker its cache?
+
+Not when routing picks. **A consult never runs on the local worker's own
+server unless you name that model yourself.**
+
+A single-slot llama.cpp server holds one prompt in its KV cache. A consult
+there replaces the worker's prompt, and the worker's next turn
+re-processes the whole session.
+
+| Case | What happens |
+| --- | --- |
+| Worker is a cloud model | Nothing is excluded |
+| Consultant on another server | Eligible as usual |
+| Same server, `/props` reports more than one slot | Eligible: the consult takes another slot |
+| Same server, one slot or unknown | Left out of routing and class resolution |
+| You name it anyway (picker, `/consult @name`, the worker names it) | It runs, with a warning |
+
+The picker tags those models `⚠ evicts worker cache`. The judge fallback
+tier and the prescreen follow the same rule.
+
+The consult result is appended at the end of the worker's context, so
+the cached prefix survives. Tool descriptions are frozen when the session
+loads, so pinning or registering mid-session doesn't rewrite them.
+
+**A cloud worker's cache is kept warm while it waits.** Cloud prompt
+caches expire after a few minutes unused, and a consult can run 15. After
+4 minutes of worker silence, Pi replays the worker's last request with
+output capped to one token: same tools, prompt, messages, and session
+affinity. One cache read instead of re-processing the whole session.
+
+| Worker | Keep-alive |
+| --- | --- |
+| OpenAI-compatible (chat completions, Responses), Gemini | Pings |
+| Anthropic without extended thinking | Pings |
+| Anthropic with extended thinking | Skipped: a one-token cap would change the thinking config, which breaks the cache |
+| Self-hosted (llama.cpp and friends) | Skipped: the KV cache doesn't expire |
+| `meta` | Skipped: another package rewrites its payload after geocine |
+
+The footer shows each ping and the cached tokens the provider reported.
+`cached 0 tok (miss)` means the provider didn't keep it, so the ping
+isn't helping there.
+
+---
+
 Next: [why Pi asks for approval](consultation-approval.md).

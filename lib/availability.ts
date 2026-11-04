@@ -14,6 +14,7 @@
 //     routing don't re-ping a server on every call.
 
 import type { ModelConfig } from "./config.ts";
+import { sameOrigin } from "./judge/index.ts";
 
 /** The slice of pi's ModelRegistry that availability needs. */
 export interface PiModelRegistry {
@@ -48,6 +49,99 @@ async function serverAlive(baseUrl: string): Promise<boolean> {
 	}
 	probeCache.set(origin, { ok, ts: Date.now() });
 	return ok;
+}
+
+// ---------- worker prompt-cache protection ----------
+//
+// A consult on the server that is serving a local worker competes for the
+// worker's KV cache. On a single-slot llama.cpp server the consult prompt
+// replaces the worker's slot and the worker's next turn re-prefills the
+// whole session. A model-swapping router on that origin is worse (the
+// worker model is unloaded). Same rule as the judge fallback tier and the
+// prescreen: avoid it. Cloud endpoints never count — their prompt caches
+// are not a single shared slot.
+
+const SLOT_CACHE_TTL_MS = 60_000;
+/** origin -> llama.cpp total_slots (undefined = unknown). */
+const slotCache = new Map<string, { slots?: number; ts: number }>();
+
+async function serverSlots(origin: string): Promise<number | undefined> {
+	const cached = slotCache.get(origin);
+	if (cached && Date.now() - cached.ts < SLOT_CACHE_TTL_MS) return cached.slots;
+	let slots: number | undefined;
+	try {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+		const res = await fetch(`${origin}/props`, { signal: controller.signal });
+		clearTimeout(timer);
+		if (res.ok) {
+			const body = (await res.json()) as { total_slots?: unknown };
+			if (typeof body.total_slots === "number") slots = body.total_slots;
+		}
+	} catch {
+		slots = undefined;
+	}
+	slotCache.set(origin, { slots, ts: Date.now() });
+	return slots;
+}
+
+/** Loopback or private-network URL: a self-hosted server, not a cloud API. */
+export function selfHostedUrl(raw: string): boolean {
+	try {
+		return selfHosted(new URL(raw));
+	} catch {
+		return false;
+	}
+}
+
+function selfHosted(url: URL): boolean {
+	const h = url.hostname.replace(/^\[|\]$/g, "");
+	return (
+		h === "localhost" ||
+		h === "::1" ||
+		h.endsWith(".local") ||
+		/^127\./.test(h) ||
+		/^10\./.test(h) ||
+		/^192\.168\./.test(h) ||
+		/^172\.(1[6-9]|2\d|3[01])\./.test(h)
+	);
+}
+
+/**
+ * Entries in `pool` whose consult would evict the local worker's prompt
+ * cache: served from the worker's own self-hosted server, and that server
+ * has one slot (or an unknown count — fail toward keeping the cache).
+ * Map of entry name -> human reason. Empty for cloud workers.
+ */
+export async function cacheSharingModels(
+	pool: Record<string, ModelConfig>,
+	registry: PiModelRegistry | undefined,
+	workerBaseUrl: string | undefined,
+): Promise<Map<string, string>> {
+	const sharing = new Map<string, string>();
+	if (!registry || !workerBaseUrl) return sharing;
+	let worker: URL;
+	try {
+		worker = new URL(workerBaseUrl);
+	} catch {
+		return sharing;
+	}
+	if (!selfHosted(worker)) return sharing;
+	const same = Object.entries(pool).filter(([, c]) => {
+		if (!c.provider) return false;
+		try {
+			const url = registry.find(c.provider, c.model)?.baseUrl;
+			return url !== undefined && sameOrigin(url, workerBaseUrl);
+		} catch {
+			return false;
+		}
+	});
+	if (same.length === 0) return sharing;
+	const slots = await serverSlots(worker.origin);
+	if (slots !== undefined && slots > 1) return sharing;
+	const why = `shares the worker's server (${worker.origin}, ${slots === 1 ? "1 slot" : "slot count unknown"}) — would evict its prompt cache`;
+	for (const [name] of same) sharing.set(name, why);
+	return sharing;
 }
 
 /**

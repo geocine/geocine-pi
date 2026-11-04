@@ -22,7 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { offlineModels, type PiModelRegistry } from "../lib/availability.ts";
+import { cacheSharingModels, offlineModels, type PiModelRegistry } from "../lib/availability.ts";
 import {
 	type ModelConfig,
 	modelLabel,
@@ -45,6 +45,7 @@ import {
 import { choiceOf, DEFAULT_MIN_CONFIDENCE, judge, type JudgeQuestion, modelBaseUrl, noulOf, sameOrigin, scoreOf } from "../lib/judge/index.ts";
 import { looksLikeRefusal, runPi, type PiProgress, type PiRunResult } from "../lib/pi-exec.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
+import { startKeepAlive } from "../lib/keepalive.ts";
 import { historySummary, routeHistoryState } from "../lib/route-history.ts";
 import { taskIsRefusalSensitive } from "./triage.ts";
 import { isConsultChild } from "../lib/consult-child.ts";
@@ -711,6 +712,8 @@ async function gateConsult(
 	question: string,
 	files: string[],
 	offline: Map<string, string>,
+	/** Registered models that would evict the local worker's prompt cache. */
+	sharing: Map<string, string>,
 ): Promise<GateResult> {
 	// Whenever the approve node answered, its probability rides EVERY
 	// outcome (including user yes/no): the pair is a calibration label.
@@ -773,6 +776,7 @@ async function gateConsult(
 					`{${proposed.classes?.join(", ") || "unclassed"}} · jail ${proposed.jail ?? "staged"}${approveP !== undefined ? ` · judge unsure (p=${approveP.toFixed(2)})` : ""}`,
 					`files: ${files.join(", ") || "(none)"}`,
 					`q: ${question.slice(0, 200)}${question.length > 200 ? "…" : ""}`,
+					...(sharing.has(proposedName) ? [`⚠ ${sharing.get(proposedName)}`] : []),
 				],
 			},
 		);
@@ -790,18 +794,20 @@ async function gateConsult(
 			// else pi's own model picker offers. Offline models are not
 			// choices — a picked rescuer must be able to run.
 			const extras = await unregisteredPool(cfg, ctx);
+			const extrasSharing = await cacheSharingModels(extras, ctx.modelRegistry, modelBaseUrl(ctx.model));
+			const evictTag = (why: string | undefined) => (why ? " · ⚠ evicts worker cache" : "");
 			const rosterItems: SelectItem[] = [
 				...Object.entries(pool)
 					.filter(([n]) => !offline.has(n))
 					.map(([n, c]) => ({
 						value: n,
 						label: `${n === defaultName ? "* " : "  "}${modelLabel(c)}`,
-						description: `${c.role ?? "general consultant"} — {${c.classes?.join(", ") || "unclassed"}}${c.rank !== undefined ? ` #${c.rank}` : ""} · ${c.jail ?? "staged"}`,
+						description: `${c.role ?? "general consultant"} — {${c.classes?.join(", ") || "unclassed"}}${c.rank !== undefined ? ` #${c.rank}` : ""} · ${c.jail ?? "staged"}${evictTag(sharing.get(n))}`,
 					})),
 				...Object.keys(extras).map((n) => ({
 					value: `pi:${n}`,
 					label: `  ${n}`,
-					description: `unregistered — {${extras[n].classes?.join(", ") || "unclassed"}} · staged`,
+					description: `unregistered — {${extras[n].classes?.join(", ") || "unclassed"}} · staged${evictTag(extrasSharing.get(n))}`,
 				})),
 			];
 			const picked = await richSelect(ctx, "Who should rescue this? (type to filter)", rosterItems, {
@@ -1162,6 +1168,25 @@ function cleanupStaging(staging: StagingResult): void {
 	}
 }
 
+/**
+ * Start the worker cache keep-alive; returns its stop function. Pings show
+ * in the footer with the cached tokens the provider reported, so a miss
+ * (0 cached) is visible instead of assumed away.
+ */
+function keepWorkerWarm(ctx: ExtensionContext): () => void {
+	const ka = startKeepAlive(ctx, (s) => {
+		const read = s.lastCacheRead ?? 0;
+		ctx.ui.setStatus("keepalive", `keep-alive: ${s.pings} ping${s.pings === 1 ? "" : "s"} · cached ${read.toLocaleString()} tok${read ? "" : " (miss)"}`);
+	});
+	return () => {
+		const s = ka.stop();
+		ctx.ui.setStatus("keepalive", undefined);
+		if (s.pings > 0) {
+			ctx.ui.notify(`keep-alive: ${s.pings} ping${s.pings === 1 ? "" : "s"} kept the worker cache warm (last: ${(s.lastCacheRead ?? 0).toLocaleString()} cached tok)`, "info");
+		}
+	};
+}
+
 // ---------- extension ----------
 
 export default function advisor(pi: ExtensionAPI) {
@@ -1211,19 +1236,25 @@ export default function advisor(pi: ExtensionAPI) {
 			// never sees them and a class resolves to an online carrier.
 			const offline = await offlineModels(cfg.models, ctx.modelRegistry);
 			const available = Object.fromEntries(Object.entries(cfg.models).filter(([n]) => !offline.has(n)));
+			// Worker prompt cache: models on the local worker's own
+			// single-slot server would evict it. Routing and class
+			// resolution skip them; only an explicit name still reaches one.
+			const sharing = await cacheSharingModels(available, ctx.modelRegistry, modelBaseUrl(ctx.model));
+			const cacheSafe = Object.fromEntries(Object.entries(available).filter(([n]) => !sharing.has(n)));
 			// Routing: an explicit model proposal stands; otherwise the judge
 			// assigns by role/cost/guardrail fit, and only then the static
 			// default.
 			let proposedBy: "model" | "default" | "judge" = params.model ? "model" : "default";
 			let wanted = params.model;
 			if (!wanted) {
-				const routed = await routeModel(cfg, available, params.question, params.context, params.files ?? [], mainModelId(ctx), modelBaseUrl(ctx.model));
+				const routed = await routeModel(cfg, cacheSafe, params.question, params.context, params.files ?? [], mainModelId(ctx), modelBaseUrl(ctx.model));
 				if (routed) {
 					wanted = routed;
 					proposedBy = "judge";
 				}
 			}
-			const resolved = resolveModel({ ...cfg, models: available }, wanted);
+			let resolved = resolveModel({ ...cfg, models: cacheSafe }, wanted);
+			if ("error" in resolved) resolved = resolveModel({ ...cfg, models: available }, wanted);
 			if ("error" in resolved) {
 				// Distinguish "no such model" from "it exists but is offline".
 				const full = resolveModel(cfg, wanted);
@@ -1243,117 +1274,128 @@ export default function advisor(pi: ExtensionAPI) {
 			}
 			const cid = newCid();
 
-			// Rescuer selection + permission gate: the user confirms,
-			// overrides, or rejects the proposal.
-			const gate = await gateConsult(
-				cfg,
-				ctx,
-				resolved.name,
-				resolved.model,
-				proposedBy,
-				params.question,
-				params.files ?? [],
-				offline,
-			);
-			if (!gate.approved) {
-				// A denied request is itself a training label: log it.
-				appendRecord(logDir(cfg), {
-					type: "consult_request",
-					cid,
-					ts: nowIso(),
-					cwd: ctx.cwd,
-					mainModel: mainModelId(ctx),
-					consultant: resolved.name,
-					consultantModel: modelLabel(resolved.model),
-					source: "tool",
-					question: params.question,
-					files: params.files ?? [],
-					contextNote: params.context,
-					approval: gate.approval,
-					instead: gate.instead,
-					approveP: gate.approveP,
-					proposedConsultant: resolved.name,
-					proposedConsultantModel: modelLabel(resolved.model),
-					chosenBy: proposedBy,
-					offlineExcluded: offline.size ? Object.fromEntries(offline) : undefined,
-				});
-				if (gate.instead) {
+			// Keep the worker's prompt cache warm while it waits (approval + consult).
+			const stopWarm = keepWorkerWarm(ctx);
+			try {
+				// Rescuer selection + permission gate: the user confirms,
+				// overrides, or rejects the proposal.
+				const gate = await gateConsult(
+					cfg,
+					ctx,
+					resolved.name,
+					resolved.model,
+					proposedBy,
+					params.question,
+					params.files ?? [],
+					offline,
+					sharing,
+				);
+				if (gate.approved && ctx.hasUI) {
+					const evicts = await cacheSharingModels({ [gate.name]: gate.model }, ctx.modelRegistry, modelBaseUrl(ctx.model));
+					if (evicts.size) ctx.ui.notify(`consult: ${modelLabel(gate.model)} ${evicts.get(gate.name)}`, "warning");
+				}
+				if (!gate.approved) {
+					// A denied request is itself a training label: log it.
+					appendRecord(logDir(cfg), {
+						type: "consult_request",
+						cid,
+						ts: nowIso(),
+						cwd: ctx.cwd,
+						mainModel: mainModelId(ctx),
+						consultant: resolved.name,
+						consultantModel: modelLabel(resolved.model),
+						source: "tool",
+						question: params.question,
+						files: params.files ?? [],
+						contextNote: params.context,
+						approval: gate.approval,
+						instead: gate.instead,
+						approveP: gate.approveP,
+						proposedConsultant: resolved.name,
+						proposedConsultantModel: modelLabel(resolved.model),
+						chosenBy: proposedBy,
+						offlineExcluded: offline.size ? Object.fromEntries(offline) : undefined,
+					});
+					if (gate.instead) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `The user skipped this consultation and wants you to do this instead:\n\n${gate.instead}\n\nFollow that direction. Do not call consult again for this problem unless the user asks.`,
+								},
+							],
+							details: { cid, consultant: resolved.name, denied: true, instead: gate.instead },
+						};
+					}
 					return {
 						content: [
 							{
 								type: "text",
-								text: `The user skipped this consultation and wants you to do this instead:\n\n${gate.instead}\n\nFollow that direction. Do not call consult again for this problem unless the user asks.`,
+								text: "The user DECLINED this consultation. Do not call consult again for this problem. Continue working on it yourself: re-read the failing output carefully, question your current assumption, and try a different approach.",
 							},
 						],
-						details: { cid, consultant: resolved.name, denied: true, instead: gate.instead },
+						details: { cid, consultant: resolved.name, denied: true },
 					};
 				}
-				return {
-					content: [
-						{
-							type: "text",
-							text: "The user DECLINED this consultation. Do not call consult again for this problem. Continue working on it yourself: re-read the failing output carefully, question your current assumption, and try a different approach.",
-						},
-					],
-					details: { cid, consultant: resolved.name, denied: true },
-				};
-			}
-			if (gate.name !== resolved.name) {
-				ctx.ui.notify(`Rescuer overridden: ${modelLabel(resolved.model)} → ${modelLabel(gate.model)}`, "info");
-			}
+				if (gate.name !== resolved.name) {
+					ctx.ui.notify(`Rescuer overridden: ${modelLabel(resolved.model)} → ${modelLabel(gate.model)}`, "info");
+				}
 
-			// Stream the consultant's thinking/answer into the tool display
-			// so the wait is observable instead of a spinner.
-			const gateLabel = modelLabel(gate.model);
-			const streamProgress = onUpdate
-				? (p: PiProgress) => {
-						const body =
-							p.phase === "tool"
-								? `→ using tool: ${p.text}`
-								: p.text.length > 1500
-									? `…${p.text.slice(-1500)}`
-									: p.text;
-						onUpdate({
-							content: [{ type: "text", text: `[${gateLabel} · turn ${p.turn} · ${p.phase}]\n${body}` }],
-							details: { cid, consultant: gate.name, streaming: true },
-						});
-					}
-				: undefined;
-			const outcome = await consult(
-				cfg,
-				ctx,
-				cid,
-				"tool",
-				gate.name,
-				gate.model,
-				params.question,
-				params.files ?? [],
-				params.context,
-				signal,
-				(msg) => ctx.ui.setStatus("advisor", msg),
-				gate.approval,
-				{
-					proposedConsultant: resolved.name,
-					proposedConsultantModel: modelLabel(resolved.model),
-					chosenBy: gate.chosenBy,
-					approveP: gate.approveP,
-					offline,
-					pinned: gate.pinned,
-				},
-				streamProgress,
-			);
-			ctx.ui.setStatus("advisor", undefined);
-			return {
-				content: [{ type: "text", text: outcome.note }],
-				details: {
+				// Stream the consultant's thinking/answer into the tool display
+				// so the wait is observable instead of a spinner.
+				const gateLabel = modelLabel(gate.model);
+				const streamProgress = onUpdate
+					? (p: PiProgress) => {
+							const body =
+								p.phase === "tool"
+									? `→ using tool: ${p.text}`
+									: p.text.length > 1500
+										? `…${p.text.slice(-1500)}`
+										: p.text;
+							onUpdate({
+								content: [{ type: "text", text: `[${gateLabel} · turn ${p.turn} · ${p.phase}]\n${body}` }],
+								details: { cid, consultant: gate.name, streaming: true },
+							});
+						}
+					: undefined;
+				const outcome = await consult(
+					cfg,
+					ctx,
 					cid,
-					consultant: gate.name,
-					proposed: resolved.name,
-					jail: outcome.jail,
-					refused: outcome.refused,
-					turns: outcome.result.turns,
-				},
-			};
+					"tool",
+					gate.name,
+					gate.model,
+					params.question,
+					params.files ?? [],
+					params.context,
+					signal,
+					(msg) => ctx.ui.setStatus("advisor", msg),
+					gate.approval,
+					{
+						proposedConsultant: resolved.name,
+						proposedConsultantModel: modelLabel(resolved.model),
+						chosenBy: gate.chosenBy,
+						approveP: gate.approveP,
+						offline,
+						pinned: gate.pinned,
+					},
+					streamProgress,
+				);
+				ctx.ui.setStatus("advisor", undefined);
+				return {
+					content: [{ type: "text", text: outcome.note }],
+					details: {
+						cid,
+						consultant: gate.name,
+						proposed: resolved.name,
+						jail: outcome.jail,
+						refused: outcome.refused,
+						turns: outcome.result.turns,
+					},
+				};
+			} finally {
+				stopWarm();
+			}
 		},
 	});
 
@@ -1395,33 +1437,42 @@ export default function advisor(pi: ExtensionAPI) {
 				ctx.ui.notify(resolved.error, "error");
 				return;
 			}
+			// You picked it, so it runs — but say what it costs the worker.
+			const evicts = await cacheSharingModels({ [resolved.name]: resolved.model }, ctx.modelRegistry, modelBaseUrl(ctx.model));
+			if (evicts.size) ctx.ui.notify(`${modelLabel(resolved.model)} ${evicts.get(resolved.name)}`, "warning");
 			const cid = newCid();
 			const label = modelLabel(resolved.model);
 			ctx.ui.notify(
 				`Consulting ${label}${fileSpecs.length ? ` (staging ${fileSpecs.length} file(s))` : ""}…`,
 				"info",
 			);
-			const outcome = await consult(
-				cfg,
-				ctx,
-				cid,
-				"command",
-				resolved.name,
-				resolved.model,
-				question,
-				fileSpecs,
-				undefined,
-				undefined,
-				(msg) => ctx.ui.setStatus("advisor", msg),
-				"user_command",
-				{ offline },
-				// Stream the consultant's live thinking/answer into the footer.
-				(p) => {
-					const tail = p.text.replace(/\s+/g, " ").trim().slice(-90);
-					ctx.ui.setStatus("advisor", `${label} · ${p.phase}${p.phase === "tool" ? ` ${p.text}` : `: …${tail}`}`);
-				},
-			);
-			ctx.ui.setStatus("advisor", undefined);
+			const stopWarm = keepWorkerWarm(ctx);
+			let outcome: ConsultOutcome;
+			try {
+				outcome = await consult(
+					cfg,
+					ctx,
+					cid,
+					"command",
+					resolved.name,
+					resolved.model,
+					question,
+					fileSpecs,
+					undefined,
+					undefined,
+					(msg) => ctx.ui.setStatus("advisor", msg),
+					"user_command",
+					{ offline },
+					// Stream the consultant's live thinking/answer into the footer.
+					(p) => {
+						const tail = p.text.replace(/\s+/g, " ").trim().slice(-90);
+						ctx.ui.setStatus("advisor", `${label} · ${p.phase}${p.phase === "tool" ? ` ${p.text}` : `: …${tail}`}`);
+					},
+				);
+				ctx.ui.setStatus("advisor", undefined);
+			} finally {
+				stopWarm();
+			}
 			// Deliver the advisory into the worker transcript so the model sees it.
 			pi.sendUserMessage(
 				`Advisory note from ${label} (requested by the user):\n\n${outcome.note}`,
