@@ -46,6 +46,7 @@ import {
 	resolveJudge,
 } from "../lib/judge/index.ts";
 import { taskIsRefusalSensitive } from "./triage.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 interface ToolEventSummary {
 	name: string;
@@ -182,6 +183,8 @@ async function tier1Verdict(
 }
 
 export default function watchdog(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	let enabled = true;
 	let ring: ToolEventSummary[] = [];
 	let turnIndex = 0;

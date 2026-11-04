@@ -7,6 +7,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { CONSULT_CHILD_ENV } from "./consult-child.ts";
 
 export interface PiProgress {
 	/** What the child is currently producing. */
@@ -68,6 +69,8 @@ function piCliInvocation(piArgs: string[]): { command: string; args: string[] } 
 }
 
 export async function runPi(options: PiRunOptions): Promise<PiRunResult> {
+	// --no-session: the child starts with no transcript. The main thread
+	// never reaches it; the brief is the only conversation it gets.
 	const piArgs: string[] = ["--mode", "json", "-p", "--no-session"];
 	if (options.provider) piArgs.push("--provider", options.provider);
 	if (options.model) piArgs.push("--model", options.model);
@@ -94,13 +97,17 @@ export async function runPi(options: PiRunOptions): Promise<PiRunResult> {
 			shell: false,
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
-			env: options.jail
-				? {
-						...process.env,
-						GEOCINE_JAIL_ROOT: options.jail.root,
-						...(options.jail.auditFile ? { GEOCINE_JAIL_AUDIT: options.jail.auditFile } : {}),
-					}
-				: undefined,
+			env: {
+				...process.env,
+				// Behavioral geocine extensions go inert in the child (lib/consult-child.ts).
+				[CONSULT_CHILD_ENV]: "1",
+				...(options.jail
+					? {
+							GEOCINE_JAIL_ROOT: options.jail.root,
+							...(options.jail.auditFile ? { GEOCINE_JAIL_AUDIT: options.jail.auditFile } : {}),
+						}
+					: {}),
+			},
 		});
 
 		const timeout = setTimeout(() => {

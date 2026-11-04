@@ -20,11 +20,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { calibrationReport, foldCalibration, resetCalibration, snapshotAgeMs } from "../lib/calibration.ts";
 import { loadConfig, logDir } from "../lib/config.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 /** Auto-fold when the snapshot is older than this (paced by updatedAt). */
 const AUTO_FOLD_MS = 7 * 24 * 60 * 60 * 1000;
 
 export default function calibration(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	// Keep the snapshot current without ceremony: fold roughly weekly.
 	pi.on("session_start", async (_event, ctx) => {
 		try {

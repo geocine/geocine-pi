@@ -25,6 +25,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { isLocalWorker, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso, type RescueRecord, type RescueToolEvent } from "../lib/consult-log.ts";
 import { distillRescue, latestRescueRecord } from "../lib/distill.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 const MAX_TOOL_EVENTS = 60;
 
@@ -91,6 +92,8 @@ function buildFailureDigest(ctx: ExtensionContext): string {
 }
 
 export default function rescue(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	let episode: Episode | undefined;
 	let lastRecord: RescueRecord | undefined;
 

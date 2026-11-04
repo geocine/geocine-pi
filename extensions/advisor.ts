@@ -47,6 +47,7 @@ import { looksLikeRefusal, runPi, type PiProgress, type PiRunResult } from "../l
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
 import { historySummary, routeHistoryState } from "../lib/route-history.ts";
 import { taskIsRefusalSensitive } from "./triage.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 const MAX_STAGED_FILE_BYTES = 256 * 1024;
@@ -955,6 +956,8 @@ function cleanupStaging(staging: StagingResult): void {
 // ---------- extension ----------
 
 export default function advisor(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	// Roster snapshot for the tool description (global config; the local
 	// model proposes a rescuer BY ROLE from this list).
 	const rosterAtLoad = buildRoster(loadConfig());

@@ -14,8 +14,11 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 export default function askUser(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	pi.registerTool({
 		name: "ask_user",
 		label: "Ask user",

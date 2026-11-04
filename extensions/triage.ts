@@ -48,6 +48,7 @@ import {
 	type JudgeQuestion,
 } from "../lib/judge/index.ts";
 import { buildRoster } from "./advisor.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 const ROUTES = ["local", "plan_first", "frontier"] as const;
 type Route = (typeof ROUTES)[number];
@@ -107,6 +108,8 @@ function assistantText(message: { role?: string; content?: unknown }): string | 
 }
 
 export default function triage(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	let turnIndex = 0;
 
 	pi.on("session_start", async () => {

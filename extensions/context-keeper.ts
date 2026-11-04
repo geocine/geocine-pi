@@ -61,6 +61,7 @@ import { Type } from "typebox";
 import { type ContextConfig, contextManaged, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
 import { judge, modelBaseUrl, noulOf, scoreOf } from "../lib/judge/index.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 const PRUNED_STASH_TYPE = "geocine-pruned";
 const NOTE_TYPE = "geocine-note";
@@ -667,6 +668,8 @@ const CHECKPOINT_INSTRUCTION = [
 ].join("\n");
 
 export default function contextKeeper(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	// -- 0. early + idle compaction --
 	//
 	// Fires on agent_settled, NOT turn_end: mid-run the next LLM request is

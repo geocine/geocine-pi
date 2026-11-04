@@ -23,6 +23,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isLocalWorker, loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
 import { judge, modelBaseUrl, noulOf, resolveJudge } from "../lib/judge/index.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 const RING_MAX = 30;
 const COOLDOWN_CALLS = 4;
@@ -50,6 +51,8 @@ function callPreview(toolName: string, input: unknown): string {
 }
 
 export default function toolGuard(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	let task = "";
 	let ring: CallEntry[] = [];
 	let callCounts = new Map<string, number>();

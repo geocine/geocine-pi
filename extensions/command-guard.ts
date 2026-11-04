@@ -17,6 +17,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { loadConfig, logDir } from "../lib/config.ts";
 import { appendRecord, newCid, nowIso } from "../lib/consult-log.ts";
 import { judge, modelBaseUrl, noulOf, resolveJudge } from "../lib/judge/index.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 /**
  * Clearly destructive shapes only — a false positive here costs one judge
@@ -42,6 +43,8 @@ const DESTRUCTIVE: RegExp[] = [
 ];
 
 export default function commandGuard(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	let lastUserMessage = "";
 
 	pi.on("input", async (event) => {

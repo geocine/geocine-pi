@@ -39,6 +39,7 @@ import { distillRescue, latestRescueRecord, LESSONS_DIR } from "../lib/distill.t
 import { judgeFabricStats, judgeStatus, modelBaseUrl } from "../lib/judge/index.ts";
 import { richSelect, type SelectItem } from "../lib/rich-select.ts";
 import { harnessHubLine, harnessMenu } from "./models/index.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 const SECTIONS = ["models", "approval", "context", "harness", "watchdog", "judge", "rescue", "data", "distill", "log", "lessons", "config"] as const;
 type Section = (typeof SECTIONS)[number];
@@ -653,6 +654,8 @@ async function runSection(section: Section, ctx: ExtensionContext): Promise<void
 }
 
 export default function geocineMenu(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	pi.registerCommand("geocine", {
 		description: "geocine-pi hub: models, approval, context keeper, watchdog/rescue, training data, config",
 		getArgumentCompletions: (prefix: string) => {

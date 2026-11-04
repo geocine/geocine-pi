@@ -13,6 +13,7 @@
 // approval gate) is excluded: that is the human thinking, not the agent.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 const STATUS_ID = "worked-timer";
 
@@ -27,6 +28,8 @@ function formatDuration(ms: number): string {
 }
 
 export default function workedTimer(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	let startedAt: number | undefined;
 	let pausedMs = 0;
 	let pauseStart: number | undefined;

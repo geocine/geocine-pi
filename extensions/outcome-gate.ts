@@ -71,6 +71,7 @@ import {
 } from "../lib/judge/index.ts";
 import { looksLikeRefusalText, REFUSED_P } from "../lib/pi-exec.ts";
 import { canHopAbliterated, hopAfterRefusal } from "./triage.ts";
+import { isConsultChild } from "../lib/consult-child.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -120,6 +121,8 @@ async function git(cwd: string, args: string[], cap: number): Promise<string> {
 }
 
 export default function outcomeGate(pi: ExtensionAPI) {
+	// Inert inside a consult child: the brief is the only context it gets.
+	if (isConsultChild()) return;
 	let lastUserMessage = "";
 	let lastAnswer = "";
 	let turnsSinceInput = 0;

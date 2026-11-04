@@ -117,6 +117,14 @@ The consultant runs in a separate, sessionless Pi process with:
 
 It returns one advisory note. It never inherits the main tool loop.
 
+The brief is the only conversation it gets. The child never sees the main
+transcript, session notes, or compacted memory. Under
+`GEOCINE_CONSULT_CHILD=1`, every behavioral geocine extension
+(triage, watchdog, outcome gate, context keeper, advisor, …) does
+nothing, so nothing can steer, hop, nudge, or inject into the consult.
+Provider and model-harness extensions still load so the child can reach
+its model.
+
 ---
 
 ## How do you choose the boundary?
