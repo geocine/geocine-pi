@@ -36,8 +36,13 @@ sequenceDiagram
             U-->>G: Use proposed model
             G->>C: Run
         else Override
-            U-->>G: Pick another model
+            U-->>G: Pick any model from pi's list
+            opt From now on
+                G->>G: Pin it for tasks like this
+            end
             G->>C: Run override
+        else Something else
+            U-->>W: Do this instead (your text)
         else Persist
             U-->>G: Always this model or all models
             G->>C: Save + run
@@ -141,6 +146,51 @@ means it can't tell — the threshold only buys silence.
 Set `models.<name>.autoApprove` when one model has earned a permanent
 exception. Choosing a persistent option in the dialog writes the global
 config immediately.
+
+---
+
+## What happens when you pick another model?
+
+**Pick another** lists your registered rescuers first, then every other
+model pi's own picker offers, marked *unregistered*. An unregistered pick
+runs with `jail: "staged"`, the safe default for a model you haven't
+classified.
+
+Then one question: **use it for tasks like this from now on?**
+
+| Answer | What happens |
+| --- | --- |
+| Just this once | It runs. The override is logged as usual. |
+| Yes, from now on | You name the kind of task (Enter keeps the question). The pin lands in global `geocine.json` under `routing.pinned`. An unregistered model is registered too: that task becomes its role, and its classes come from pi's catalog (below). |
+
+Classes for a newly registered model are read from facts, never guessed:
+
+| Class | From |
+| --- | --- |
+| `vision` | the model accepts image input |
+| `local` | provider is `llama.cpp`, `lmstudio`, or `ollama` |
+| `cheap` | local, a `rescue.localProviders` provider, or priced at or under $0.50 in / $2.50 out per Mtok |
+
+`frontier`, `intelligent`, and `abliterated` can't be derived. The model
+stays aligned and staged until you add them in `geocine.json`.
+
+Next time the router sees the same kind of task, it proposes the pinned
+model. You still approve. A pin outranks cost, rank, and history, but not
+a missing capability or a refusal-prone strict model. `/models` lists your
+pins; delete one from `routing.pinned` to unpin.
+
+Pins need the route node, so they apply when the worker leaves `model`
+unset. A class the worker names explicitly still stands.
+
+`/consult @provider/model` takes any model from pi's list the same way.
+
+---
+
+## What if you want something else entirely?
+
+**Something else…** skips the consult and asks what the worker should
+do instead. Your text goes back to the worker as the tool result. It's
+logged as `user_instead`, which doesn't count against the proposed model.
 
 ---
 

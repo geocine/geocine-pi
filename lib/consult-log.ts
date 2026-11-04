@@ -48,7 +48,11 @@ export interface ConsultRequestRecord extends BaseRecord {
 	 * How the consultation was authorized. "user_no" records are denied
 	 * requests — direct training labels for "should not have consulted".
 	 */
-	approval?: "user_yes" | "user_no" | "always_allow" | "auto" | "judge_auto" | "headless" | "user_command";
+	approval?: "user_yes" | "user_no" | "user_instead" | "always_allow" | "auto" | "judge_auto" | "headless" | "user_command";
+	/** "user_instead" only: what the user told the worker to do instead of consulting. */
+	instead?: string;
+	/** True when the user pinned this override as the pick for tasks like this one. */
+	pinned?: boolean;
 	/**
 	 * The fabric's approve-node probability, whenever the node answered —
 	 * including when it stayed below the auto-approve threshold and the

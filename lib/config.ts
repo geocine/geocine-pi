@@ -457,8 +457,31 @@ export function contextManaged(model: unknown, cfg: GeocineConfig): boolean {
 	return (cfg.context?.providers ?? DEFAULT_CONTEXT_PROVIDERS).includes(provider);
 }
 
+/**
+ * A standing user preference: "for tasks like `task`, consult `model`".
+ * Written when the user overrides a proposal at the approval gate and
+ * chooses to keep that pick. The route node matches new consults against
+ * `task` (no fixed taxonomy — the judge decides "same kind of task") and
+ * proposes the pinned model; the user still approves.
+ */
+export interface PinnedPreference {
+	/** What kind of task this is, in the user's words (or the original question). */
+	task: string;
+	/** Registry key of the pinned model. */
+	model: string;
+	/** Stable identity (provider/model) — survives a key rename. */
+	id?: string;
+	ts?: string;
+}
+
+export interface RoutingConfig {
+	/** Newest last. Edit or delete entries here to unpin. */
+	pinned?: PinnedPreference[];
+}
+
 export interface GeocineConfig {
 	models: Record<string, ModelConfig>;
+	routing?: RoutingConfig;
 	watchdog?: WatchdogConfig;
 	triage?: TriageConfig;
 	gate?: GateConfig;
@@ -500,6 +523,10 @@ export function loadConfig(cwd?: string): GeocineConfig {
 
 	const merged: GeocineConfig = {
 		models: stripCommentKeys({ ...(global.models ?? {}), ...(project?.models ?? {}) }),
+		// Pins accumulate across both files (project pins read first).
+		routing: {
+			pinned: [...(project?.routing?.pinned ?? []), ...(global.routing?.pinned ?? [])],
+		},
 		watchdog: { ...(global.watchdog ?? {}), ...(project?.watchdog ?? {}) },
 		triage: { ...(global.triage ?? {}), ...(project?.triage ?? {}) },
 		gate: { ...(global.gate ?? {}), ...(project?.gate ?? {}) },

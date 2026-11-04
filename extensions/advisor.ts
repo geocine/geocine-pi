@@ -370,6 +370,180 @@ async function prescreen(
 type Approval = NonNullable<ConsultRequestRecord["approval"]>;
 type ChosenBy = NonNullable<ConsultRequestRecord["chosenBy"]>;
 
+// ---------- full model list + pinned preferences ----------
+
+/** Max pinned preferences kept (newest win). */
+const MAX_PINS = 20;
+
+interface CatalogModel {
+	provider: string;
+	id: string;
+	input: string[];
+	/** USD per million tokens; 0 often means "unknown" for custom providers. */
+	cost: { input: number; output: number };
+}
+
+/** Every model pi's own picker offers (auth configured). */
+function piCatalog(ctx: ExtensionContext): CatalogModel[] {
+	try {
+		return ctx.modelRegistry.getAvailable().map((m) => ({
+			provider: String(m.provider),
+			id: m.id,
+			input: m.input ?? [],
+			cost: { input: m.cost?.input ?? 0, output: m.cost?.output ?? 0 },
+		}));
+	} catch {
+		return [];
+	}
+}
+
+/** Providers that serve from this machine. */
+const ON_MACHINE_PROVIDERS = ["llama.cpp", "lmstudio", "ollama"];
+/** Price ceiling (USD per Mtok) for the derived "cheap" class. */
+const CHEAP_MAX_INPUT = 0.5;
+const CHEAP_MAX_OUTPUT = 2.5;
+
+/**
+ * Classes read from pi's catalog facts, never guessed: vision from the
+ * input modalities, local from the provider, cheap from price (or a
+ * configured budget provider). frontier/intelligent/abliterated aren't
+ * derivable — an unclassified model stays aligned and staged until the
+ * user adds them.
+ */
+function deriveClasses(cfg: GeocineConfig, m: CatalogModel): string[] {
+	const classes: string[] = [];
+	const local = ON_MACHINE_PROVIDERS.includes(m.provider);
+	if (local) classes.push("local");
+	const budgetProvider = (cfg.rescue?.localProviders ?? DEFAULT_LOCAL_PROVIDERS).includes(m.provider);
+	const lowPrice = m.cost.input > 0 && m.cost.input <= CHEAP_MAX_INPUT && m.cost.output <= CHEAP_MAX_OUTPUT;
+	if (local || budgetProvider || lowPrice) classes.push("cheap");
+	if (m.input.includes("image")) classes.push("vision");
+	return classes;
+}
+
+/** A model pi knows but geocine.json doesn't: derived classes, staged jail (safe default). */
+function unregisteredConfig(cfg: GeocineConfig, m: CatalogModel): ModelConfig {
+	const classes = deriveClasses(cfg, m);
+	return { provider: m.provider, model: m.id, ...(classes.length ? { classes } : {}), jail: "staged" };
+}
+
+/**
+ * Pi-catalog models not already in the registry, online only, keyed by
+ * provider/id.
+ */
+async function unregisteredPool(cfg: GeocineConfig, ctx: ExtensionContext): Promise<Record<string, ModelConfig>> {
+	const known = new Set(Object.values(cfg.models).map(modelLabel));
+	const pool = Object.fromEntries(
+		piCatalog(ctx)
+			.filter((m) => !known.has(`${m.provider}/${m.id}`))
+			.map((m) => [`${m.provider}/${m.id}`, unregisteredConfig(cfg, m)]),
+	);
+	const offline = await offlineModels(pool, ctx.modelRegistry);
+	for (const name of offline.keys()) delete pool[name];
+	return pool;
+}
+
+/**
+ * Resolve a /consult target: a registry name or class first, then any
+ * provider/model from pi's catalog (run unregistered, staged).
+ */
+async function resolveAnyModel(
+	cfg: GeocineConfig,
+	available: Record<string, ModelConfig>,
+	offline: Map<string, string>,
+	spec: string | undefined,
+	ctx: ExtensionContext,
+): Promise<{ name: string; model: ModelConfig } | { error: string }> {
+	const resolved = resolveModel({ ...cfg, models: available }, spec);
+	if (!("error" in resolved)) return resolved;
+	const full = resolveModel(cfg, spec);
+	if (!("error" in full)) return { error: `${full.name} is offline: ${offline.get(full.name) ?? "offline"}` };
+	if (spec?.includes("/")) {
+		const byLabel = Object.entries(cfg.models).find(([, c]) => modelLabel(c) === spec);
+		if (byLabel) {
+			return offline.has(byLabel[0])
+				? { error: `${byLabel[0]} is offline: ${offline.get(byLabel[0])}` }
+				: { name: byLabel[0], model: byLabel[1] };
+		}
+		const extra = (await unregisteredPool(cfg, ctx))[spec];
+		if (extra) return { name: spec, model: extra };
+	}
+	return { error: `${resolved.error} — or any provider/model from pi's model list.` };
+}
+
+/** Registry key for a newly registered model: named after the model, provider/id on collision. */
+function registryKeyFor(models: Record<string, ModelConfig>, provider: string, id: string): string {
+	const short = id.split("/").pop() || id;
+	return models[short] ? `${provider}/${id}` : short;
+}
+
+/** Pins whose model is in `pool`, resolved to current keys (identity survives a rename). */
+function pinsForPool(cfg: GeocineConfig, pool: Record<string, ModelConfig>): Array<{ task: string; model: string }> {
+	const out: Array<{ task: string; model: string }> = [];
+	for (const p of cfg.routing?.pinned ?? []) {
+		const key =
+			pool[p.model] && (!p.id || modelLabel(pool[p.model]) === p.id)
+				? p.model
+				: Object.keys(pool).find((n) => p.id !== undefined && modelLabel(pool[n]) === p.id);
+		if (key) out.push({ task: p.task, model: key });
+	}
+	return out.slice(-MAX_PINS);
+}
+
+/**
+ * After a user override: keep this pick for tasks like this one? A pin
+ * registers the model when needed (staged jail, role = the task) and
+ * records a standing preference the route node matches against.
+ */
+async function offerPin(
+	ctx: ExtensionContext,
+	cfg: GeocineConfig,
+	name: string,
+	model: ModelConfig,
+	registered: boolean,
+	question: string,
+): Promise<{ name: string; pinned: boolean }> {
+	const label = modelLabel(model);
+	const choice = await richSelect(
+		ctx,
+		`Use ${label} for tasks like this from now on?`,
+		[
+			{ value: "once", label: "Just this once", description: "run it now; routing stays as it was" },
+			{
+				value: "pin",
+				label: "Yes, from now on",
+				description: "save globally; proposed next time for this kind of task (you still approve)",
+			},
+		],
+		{ header: [`q: ${question.slice(0, 200)}${question.length > 200 ? "…" : ""}`] },
+	);
+	if (choice !== "pin") return { name, pinned: false };
+	const typed = await ctx.ui.input(
+		"What kind of task is this? (Enter keeps the question)",
+		"e.g. reviewing shader code, debugging Rust lifetimes",
+	);
+	if (typed === undefined) return { name, pinned: false }; // escape = don't pin
+	const task = (typed.trim() || question).replace(/\s+/g, " ").slice(0, 200);
+	let key = name;
+	updateGlobalConfig((g) => {
+		g.models = g.models ?? {};
+		if (!registered) {
+			key = registryKeyFor({ ...cfg.models, ...g.models }, model.provider ?? "?", model.model);
+			g.models[key] = g.models[key] ?? { ...model, role: task };
+		}
+		const pins = (g.routing?.pinned ?? []).filter((p) => p.task.toLowerCase() !== task.toLowerCase());
+		pins.push({ task, model: key, id: label, ts: nowIso() });
+		g.routing = { ...(g.routing ?? {}), pinned: pins.slice(-MAX_PINS) };
+	});
+	ctx.ui.notify(
+		registered
+			? `Pinned ${label} for "${task}" (geocine.json → routing.pinned).`
+			: `Pinned ${label} for "${task}" and registered it as "${key}" {${model.classes?.join(", ") || "unclassed"}} — role: ${task}. Edit its classes in geocine.json if they're off.`,
+		"info",
+	);
+	return { name: key, pinned: true };
+}
+
 function rosterLine(name: string, c: ModelConfig, isDefault: boolean): string {
 	const role = c.role ?? "general consultant";
 	// Classes are the public handles; the map key appears only for
@@ -420,11 +594,14 @@ async function routeModel(
 	// Routing memory: past outcomes per consultant (refusals, overrides,
 	// denials) with a same-worker projection — see lib/route-history.ts.
 	const history = routeHistoryState(cfg, pool, worker);
+	// Standing user picks ("for tasks like X, use Y") — see offerPin.
+	const pinned = pinsForPool(cfg, pool);
 	const result = await judge(cfg.judge, {
 		state: {
 			question: question.slice(0, 1200),
 			context: contextNote?.slice(0, 400) ?? "(none)",
 			files,
+			...(pinned.length ? { pinned } : {}),
 			...(history ? { history } : {}),
 			models: Object.fromEntries(
 				Object.entries(pool).map(([n, c]) => [
@@ -446,7 +623,7 @@ async function routeModel(
 			rescuer: {
 				type: "choice",
 				instructions:
-					"Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). The standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Match capability tags to the question — e.g. a question about an image or screenshot needs a vision-classed model. Avoid strict-guardrail models when the content looks likely to trigger a refusal — NSFW/adult/sexual content (including image captions), or blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Ordinary reverse engineering (decompile/disassemble to understand a binary, defensive analysis) stays on aligned models. Prefer an abliterated-class one only for the refusal cases; among those, prefer one also classed local over a hosted abliterated fallback. Weigh `history` when present — it is how past consults from this user actually went: prefer models the user picked over a proposal for similar tasks (`overridden_to`, `recent_user_choices`), avoid ones that refused, were overridden away, or were denied for similar work; counts under `same_worker` happened with the same `worker` model active as now and weigh more than the overall counts. `history.unexplored` lists models with no recorded outcomes yet: when the task is low-stakes (a quick review, summary, or second opinion — not critical debugging, not refusal-sensitive content) and an unexplored model's role and classes fit just as well, prefer it over an equally-fitting known model so its history can form; never pick an unexplored model when the stakes or a capability mismatch argue otherwise. When several fit equally, prefer the lower `rank` (1 = first choice).",
+					"Pick the model in `models` whose role and classes best fit `question` (with `context` and `files`). `pinned`, when present, lists standing user choices: if `question` is the same kind of task as a pinned `task`, pick that entry's `model` — it outranks cost, rank, and history — unless the model clearly lacks a capability the question needs or the content is refusal-prone for a strict model; a newer pin wins over an older conflicting one. Otherwise: the standing goal is to spend as few LLM tokens as possible: choose the cheapest model whose capabilities cover the need (classes cheap/fast/local first), and pick intelligent/frontier only when the problem genuinely demands it. Match capability tags to the question — e.g. a question about an image or screenshot needs a vision-classed model. Avoid strict-guardrail models when the content looks likely to trigger a refusal — NSFW/adult/sexual content (including image captions), or blackhat-borderline work (exploit payloads, protection bypass, malware, unauthorized access). Ordinary reverse engineering (decompile/disassemble to understand a binary, defensive analysis) stays on aligned models. Prefer an abliterated-class one only for the refusal cases; among those, prefer one also classed local over a hosted abliterated fallback. Weigh `history` when present — it is how past consults from this user actually went: prefer models the user picked over a proposal for similar tasks (`overridden_to`, `recent_user_choices`), avoid ones that refused, were overridden away, or were denied for similar work; counts under `same_worker` happened with the same `worker` model active as now and weigh more than the overall counts. `history.unexplored` lists models with no recorded outcomes yet: when the task is low-stakes (a quick review, summary, or second opinion — not critical debugging, not refusal-sensitive content) and an unexplored model's role and classes fit just as well, prefer it over an equally-fitting known model so its history can form; never pick an unexplored model when the stakes or a capability mismatch argue otherwise. When several fit equally, prefer the lower `rank` (1 = first choice).",
 				criteria: Object.fromEntries(names.map((n) => [n, pool[n].role ?? null])),
 			},
 		},
@@ -466,6 +643,10 @@ interface GateResult {
 	chosenBy: ChosenBy;
 	/** Confidence from the fabric's approve node, when it was consulted. */
 	approveP?: number;
+	/** "Something else": what the user wants the worker to do instead. */
+	instead?: string;
+	/** The user pinned this override for tasks like this one. */
+	pinned?: boolean;
 }
 
 /**
@@ -568,7 +749,8 @@ async function gateConsult(
 			label: `Use ${label}`,
 			description: proposed.role ?? (proposed.classes?.join(", ") || "general consultant"),
 		},
-		{ value: "pick", label: "Pick another", description: "override the proposal with a different rescuer" },
+		{ value: "pick", label: "Pick another", description: "override with any model from pi's model list" },
+		{ value: "instead", label: "Something else…", description: "skip the consult — type what the model should do instead" },
 		{ value: "deny", label: "Deny", description: "no consultation — the local model keeps trying on its own" },
 		{
 			value: "always",
@@ -579,65 +761,90 @@ async function gateConsult(
 	];
 	const proposedLabel =
 		proposedBy === "model" ? " by the model" : proposedBy === "judge" ? " by the judge (role-routed)" : " (default)";
-	const choice = await richSelect(
-		ctx,
-		`Consult approval — ${label} proposed${proposedLabel}`,
-		items,
-		{
-			header: [
-				`{${proposed.classes?.join(", ") || "unclassed"}} · jail ${proposed.jail ?? "staged"}${approveP !== undefined ? ` · judge unsure (p=${approveP.toFixed(2)})` : ""}`,
-				`files: ${files.join(", ") || "(none)"}`,
-				`q: ${question.slice(0, 200)}${question.length > 200 ? "…" : ""}`,
-			],
-		},
-	);
+	// Loop so backing out of a sub-step (picker, free-text box) returns
+	// here instead of silently denying.
+	for (;;) {
+		const choice = await richSelect(
+			ctx,
+			`Consult approval — ${label} proposed${proposedLabel}`,
+			items,
+			{
+				header: [
+					`{${proposed.classes?.join(", ") || "unclassed"}} · jail ${proposed.jail ?? "staged"}${approveP !== undefined ? ` · judge unsure (p=${approveP.toFixed(2)})` : ""}`,
+					`files: ${files.join(", ") || "(none)"}`,
+					`q: ${question.slice(0, 200)}${question.length > 200 ? "…" : ""}`,
+				],
+			},
+		);
 
-	if (choice === "use") return take("user_yes", proposedBy);
-	if (choice === "pick") {
-		const pool = cfg.models;
-		const defaultName = defaultModelName(cfg);
-		// Offline models are not choices — a picked rescuer must be able to run.
-		const rosterItems: SelectItem[] = Object.entries(pool)
-			.filter(([n]) => !offline.has(n))
-			.map(([n, c]) => ({
-				value: n,
-				label: `${n === defaultName ? "* " : "  "}${modelLabel(c)}`,
-				description: `${c.role ?? "general consultant"} — {${c.classes?.join(", ") || "unclassed"}}${c.rank !== undefined ? ` #${c.rank}` : ""} · ${c.jail ?? "staged"}`,
-			}));
-		const name = await richSelect(ctx, "Who should rescue this?", rosterItems, {
-			header: offline.size > 0 ? [...offline].map(([n, why]) => `offline: ${n} — ${why}`) : undefined,
-		});
-		if (!name) return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
-		return {
-			approved: true,
-			approval: "user_yes",
-			name,
-			model: pool[name],
-			chosenBy: name === proposedName ? proposedBy : "user_override",
-			approveP,
-		};
+		if (choice === "use") return take("user_yes", proposedBy);
+		if (choice === "instead") {
+			const text = await ctx.ui.input("What should the model do instead?", "e.g. read the full error log first, then try X");
+			if (!text?.trim()) continue;
+			return { ...take("user_instead", proposedBy), approved: false, approval: "user_instead", instead: text.trim() };
+		}
+		if (choice === "pick") {
+			const pool = cfg.models;
+			const defaultName = defaultModelName(cfg);
+			// Registered rescuers first (with their roles), then everything
+			// else pi's own model picker offers. Offline models are not
+			// choices — a picked rescuer must be able to run.
+			const extras = await unregisteredPool(cfg, ctx);
+			const rosterItems: SelectItem[] = [
+				...Object.entries(pool)
+					.filter(([n]) => !offline.has(n))
+					.map(([n, c]) => ({
+						value: n,
+						label: `${n === defaultName ? "* " : "  "}${modelLabel(c)}`,
+						description: `${c.role ?? "general consultant"} — {${c.classes?.join(", ") || "unclassed"}}${c.rank !== undefined ? ` #${c.rank}` : ""} · ${c.jail ?? "staged"}`,
+					})),
+				...Object.keys(extras).map((n) => ({
+					value: `pi:${n}`,
+					label: `  ${n}`,
+					description: `unregistered — {${extras[n].classes?.join(", ") || "unclassed"}} · staged`,
+				})),
+			];
+			const picked = await richSelect(ctx, "Who should rescue this? (type to filter)", rosterItems, {
+				header: offline.size > 0 ? [...offline].map(([n, why]) => `offline: ${n} — ${why}`) : undefined,
+			});
+			if (!picked) continue;
+			const registered = !picked.startsWith("pi:");
+			const name = registered ? picked : picked.slice(3);
+			const model = registered ? pool[name] : extras[name];
+			if (name === proposedName) return take("user_yes", proposedBy);
+			const pin = await offerPin(ctx, cfg, name, model, registered, question);
+			return {
+				approved: true,
+				approval: "user_yes",
+				name: pin.name,
+				model,
+				chosenBy: "user_override",
+				approveP,
+				pinned: pin.pinned,
+			};
+		}
+		if (choice === "always") {
+			updateGlobalConfig((g) => {
+				const existing = g.models?.[proposedName];
+				if (existing) existing.autoApprove = true;
+				else {
+					g.models = g.models ?? {};
+					g.models[proposedName] = { ...proposed, autoApprove: true };
+				}
+			});
+			ctx.ui.notify(`${label} is now auto-approved (geocine.json).`, "info");
+			return take("always_allow", proposedBy);
+		}
+		if (choice === "auto") {
+			updateGlobalConfig((g) => {
+				g.approval = { ...(g.approval ?? {}), consultTool: "auto" };
+			});
+			ctx.ui.notify("All consult tool calls are now auto-approved (geocine.json).", "info");
+			return take("auto", proposedBy);
+		}
+		// "Deny" or dialog cancelled.
+		return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
 	}
-	if (choice === "always") {
-		updateGlobalConfig((g) => {
-			const existing = g.models?.[proposedName];
-			if (existing) existing.autoApprove = true;
-			else {
-				g.models = g.models ?? {};
-				g.models[proposedName] = { ...proposed, autoApprove: true };
-			}
-		});
-		ctx.ui.notify(`${label} is now auto-approved (geocine.json).`, "info");
-		return take("always_allow", proposedBy);
-	}
-	if (choice === "auto") {
-		updateGlobalConfig((g) => {
-			g.approval = { ...(g.approval ?? {}), consultTool: "auto" };
-		});
-		ctx.ui.notify("All consult tool calls are now auto-approved (geocine.json).", "info");
-		return take("auto", proposedBy);
-	}
-	// "Deny" or dialog cancelled.
-	return { ...take("user_no", proposedBy), approved: false, approval: "user_no" };
 }
 
 // ---------- jail resolution ----------
@@ -739,6 +946,7 @@ async function consult(
 		chosenBy?: ChosenBy;
 		approveP?: number;
 		offline?: Map<string, string>;
+		pinned?: boolean;
 	},
 	onProgress?: (progress: PiProgress) => void,
 ): Promise<ConsultOutcome> {
@@ -765,6 +973,7 @@ async function consult(
 		proposedConsultantModel: routing?.proposedConsultantModel,
 		approveP: routing?.approveP,
 		chosenBy: routing?.chosenBy,
+		pinned: routing?.pinned || undefined,
 		offlineExcluded: routing?.offline?.size ? Object.fromEntries(routing.offline) : undefined,
 		jail,
 		jailBy: decision.by,
@@ -1060,13 +1269,25 @@ export default function advisor(pi: ExtensionAPI) {
 					question: params.question,
 					files: params.files ?? [],
 					contextNote: params.context,
-					approval: "user_no",
+					approval: gate.approval,
+					instead: gate.instead,
 					approveP: gate.approveP,
 					proposedConsultant: resolved.name,
 					proposedConsultantModel: modelLabel(resolved.model),
 					chosenBy: proposedBy,
 					offlineExcluded: offline.size ? Object.fromEntries(offline) : undefined,
 				});
+				if (gate.instead) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `The user skipped this consultation and wants you to do this instead:\n\n${gate.instead}\n\nFollow that direction. Do not call consult again for this problem unless the user asks.`,
+							},
+						],
+						details: { cid, consultant: resolved.name, denied: true, instead: gate.instead },
+					};
+				}
 				return {
 					content: [
 						{
@@ -1117,6 +1338,7 @@ export default function advisor(pi: ExtensionAPI) {
 					chosenBy: gate.chosenBy,
 					approveP: gate.approveP,
 					offline,
+					pinned: gate.pinned,
 				},
 				streamProgress,
 			);
@@ -1137,11 +1359,11 @@ export default function advisor(pi: ExtensionAPI) {
 
 	pi.registerCommand("consult", {
 		description:
-			'Consult a stronger model: /consult [@model|@class] [+file[:a-b] …] <question>. "+" tokens stage files for the consulted model (e.g. +docs/outline.md +src/foo.ts:40-120); without them a staged-jail model answers from the question alone.',
+			'Consult a stronger model: /consult [@model|@class|@provider/model] [+file[:a-b] …] <question>. @provider/model takes any model from pi\'s list (unregistered ones run staged). "+" tokens stage files for the consulted model (e.g. +docs/outline.md +src/foo.ts:40-120); without them a staged-jail model answers from the question alone.',
 		handler: async (args, ctx) => {
 			const raw = String(args ?? "").trim();
 			if (!raw) {
-				ctx.ui.notify("Usage: /consult [@model|@class] [+file[:a-b] …] <question>", "error");
+				ctx.ui.notify("Usage: /consult [@model|@class|@provider/model] [+file[:a-b] …] <question>", "error");
 				return;
 			}
 			let modelName: string | undefined;
@@ -1161,19 +1383,15 @@ export default function advisor(pi: ExtensionAPI) {
 				.replace(/\s+/g, " ")
 				.trim();
 			if (!question) {
-				ctx.ui.notify("Usage: /consult [@model|@class] [+file[:a-b] …] <question> — a question is required.", "error");
+				ctx.ui.notify("Usage: /consult [@model|@class|@provider/model] [+file[:a-b] …] <question> — a question is required.", "error");
 				return;
 			}
 			const cfg = loadConfig(ctx.cwd);
 			const offline = await offlineModels(cfg.models, ctx.modelRegistry);
 			const available = Object.fromEntries(Object.entries(cfg.models).filter(([n]) => !offline.has(n)));
-			const resolved = resolveModel({ ...cfg, models: available }, modelName);
+			// A registry name/class, or any provider/model from pi's list.
+			const resolved = await resolveAnyModel(cfg, available, offline, modelName, ctx);
 			if ("error" in resolved) {
-				const full = resolveModel(cfg, modelName);
-				if (!("error" in full)) {
-					ctx.ui.notify(`${full.name} is offline: ${offline.get(full.name) ?? "offline"}`, "error");
-					return;
-				}
 				ctx.ui.notify(resolved.error, "error");
 				return;
 			}
@@ -1237,6 +1455,11 @@ export default function advisor(pi: ExtensionAPI) {
 				const hist = historySummary(cfg, name);
 				return `${modelLabel(c)} {${c.classes?.join(", ") || "unclassed"}} (${flags})${c.role ? ` — ${c.role}` : ""}${off}${hist ? `\n  history: ${hist}` : ""}`;
 			});
+			const pins = pinsForPool(cfg, cfg.models);
+			if (pins.length) {
+				lines.push("", "pinned (geocine.json → routing.pinned):");
+				for (const p of pins) lines.push(`  "${p.task}" → ${modelLabel(cfg.models[p.model])}`);
+			}
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});

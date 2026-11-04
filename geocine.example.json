@@ -75,6 +75,11 @@
 		}
 	},
 
+	"routing": {
+		"$comment": "Standing user picks, written by the approval gate: after you override a proposal (any model from pi's list), 'Yes, from now on' pins it for that kind of task. The route node proposes a pinned model for matching tasks; you still approve. Delete an entry to unpin.",
+		"pinned": []
+	},
+
 	"approval": {
 		"$comment": "Gate for LLM-invoked consult tool calls (user-typed /consult never asks). 'ask' prompts yes/no/always-allow/auto-all; 'judge' = the fabric's approve node auto-approves clearly justified, well-routed consults (>= approveThreshold) and falls back to asking when unsure — it never auto-denies, so denial labels stay human; 'auto' never prompts. Per-model: \"autoApprove\": true.",
 		"consultTool": "ask",
